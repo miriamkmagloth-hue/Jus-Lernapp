@@ -508,8 +508,11 @@ export function recordLevelResult(chId, levels, kind) {
     for (const k of ['basis', 'vertiefung']) {
       const v = levels[k];
       if (!v || !v[1]) continue;
-      const f = v[0] / v[1];
-      p.levels[k] = p.levels[k] == null ? f : p.levels[k] * 0.6 + f * 0.4;
+      const prior = k === 'basis' ? 0.35 : 0.2;
+      const f = (v[0] + prior * 2) / (v[1] + 2); // wenige Fragen → vorsichtiger Wert
+      // Je mehr Fragen dieser Test hatte, desto stärker zählt er (max. 50 %)
+      const alpha = Math.min(0.5, v[1] / (v[1] + 6));
+      p.levels[k] = p.levels[k] == null ? f : p.levels[k] * (1 - alpha) + f * alpha;
     }
     const wasAssessed = p.assessed;
     p.mastery = combineLevels(p.levels, p.mastery, p.assessed);

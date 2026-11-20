@@ -452,6 +452,41 @@ export function oralView(el, subId, examId) {
 }
 
 // ======================= Einstufungstest =======================
+// Vorsichtige Schätzung: wenige Fragen dürfen nicht zu extremen Werten führen (Glück/Pech ausgleichen)
+const PRIOR = { basis: 0.35, vertiefung: 0.2 }, PRIOR_WEIGHT = 2;
+export function smoothed(correct, total, level) {
+  return (correct + PRIOR[level] * PRIOR_WEIGHT) / (total + PRIOR_WEIGHT);
+}
+
+const DEPTH = {
+  normal: { label: 'Gründlich – 6 Fragen pro Kapitel (4 Basis, 2 Vertiefung), bei unklarem Ergebnis 3 Nachfragen', basis: 4, vert: 2, extra: 3 },
+  genau: { label: 'Sehr genau – 9 Fragen pro Kapitel (6 Basis, 3 Vertiefung), bei unklarem Ergebnis 3 Nachfragen', basis: 6, vert: 3, extra: 3 },
+  kurz: { label: 'Kurz – 4 Fragen pro Kapitel (3 Basis, 1 Vertiefung), nur als grobe Orientierung', basis: 3, vert: 1, extra: 2 }
+};
+
+const PRECISION = `Anforderungen an jede Frage:
+- Sie prüft VERSTÄNDNIS eines prüfungsrelevanten Punkts des Kapitels, nicht Auswendiglernen von Formulierungen.
+- Jede Frage deckt einen ANDEREN Teilaspekt des Kapitels ab (keine zwei Fragen zum selben Punkt).
+- Genau eine Antwort ist eindeutig richtig; die drei falschen Antworten sind typische, plausible Fehlvorstellungen – keine offensichtlich absurden Optionen, keine „alle/keine der genannten“, keine Fangfragen über Wortlaut.
+- Antwortoptionen sind ungefähr gleich lang, damit die richtige nicht an der Länge erkennbar ist.
+- Anwendungsfragen nutzen einen kurzen, klaren Mini-Sachverhalt.
+- Die Erklärung begründet die richtige Antwort mit Seitenangabe aus dem Lehrbuchtext.`;
+
+async function makeQuestions(sub, chapters, per) {
+  let material = '';
+  for (const c of chapters) {
+    let t = '';
+    try { t = await chapterText(sub, c.id); } catch {}
+    material += `\n\n# KAPITEL [ID ${c.id}] „${c.title}“\n` + (t ? clip(t, Math.floor(180000 / chapters.length)) : summaryDigest(c));
+  }
+  const r = await completeJson({
+    model: 'smart', maxTokens: 12000,
+    system: 'Du erstellst präzise Diagnosefragen, um den Kenntnisstand pro Kapitel zuverlässig einzuschätzen. Grundlage ist ausschließlich der Lehrbuchtext.',
+    messages: [{ role: 'user', content: `Erstelle für JEDES Kapitel unten Multiple-Choice-Fragen mit je 4 Optionen: ${per.basis} Fragen zum BASISWISSEN (davon mind. eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und ${per.vert} Frage(n) zur VERTIEFUNG.\n${PRECISION}\nJSON: {"fragen":[{"kapitelId":"…","frage":"…","optionen":["…","…","…","…"],"richtig":0-3,"erklaerung":"…","seite":"S. …","ebene":"basis|vertiefung"}]}\n${material}` }]
+  });
+  return (r.fragen || []).filter(q => q.optionen?.length >= 2 && chapters.some(c => c.id === q.kapitelId)).map(q => ({ ...q, opts: shuffle(q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }))) }));
+}
+
 export function assessmentView(el, subId, examId) {
   const sub = store.subject(subId);
   const exam = sub?.exams.find(e => e.id === examId);
@@ -463,71 +498,89 @@ export function assessmentView(el, subId, examId) {
   const todo = chs.filter(c => !prog[c.id]?.assessed);
   if (!chs.length) { el.innerHTML = '<div class="card">Zuerst müssen die Lehrbücher verarbeitet sein (Zusammenfassungen).</div>'; return; }
   el.innerHTML = `<div class="card"><h3>Einstufungstest: ${esc(exam.name)}</h3>
-    <p>Die App fragt pro Kapitel 3 kurze Fragen. Daraus ergibt sich dein tatsächlicher Kenntnisstand – ehrlicher als Selbsteinschätzung. Der Lernplan rechnet dann nur noch mit dem, was dir wirklich fehlt.</p>
-    <p class="small muted">Wichtig: Wenn du etwas nicht weißt, wähle „weiß ich nicht“ statt zu raten. Du kannst jederzeit pausieren und später weitermachen.</p>
+    <p>Die App stellt pro Kapitel mehrere präzise Fragen aus dem Lehrbuchtext – zu Basis- und Vertiefungswissen. Ist das Ergebnis eines Kapitels nicht eindeutig, kommen gezielte Nachfragen. So entscheidet nicht Glück oder Pech über die Einstufung.</p>
+    <label class="field"><span>Genauigkeit</span><select id="depth">${Object.entries(DEPTH).map(([k, d]) => `<option value="${k}">${esc(d.label)}</option>`).join('')}</select></label>
+    <p class="small muted">Wenn du etwas nicht weißt, wähle „Weiß ich nicht“. Hast du nur geraten, tippe vor dem Antworten auf „🎲 Ich rate“ – geratene Treffer zählen nur halb. Du kannst nach jedem Block pausieren.</p>
     <p class="small">${chs.length} Kapitel im Prüfungsstoff · ${chs.length - todo.length} schon eingestuft</p>
     <div class="row">${todo.length ? `<button class="btn" data-a="todo">Weiter mit ${todo.length} offenen Kapiteln</button>` : ''}<button class="btn ${todo.length ? 'secondary' : ''}" data-a="all">Alle ${todo.length ? 'neu ' : ''}einstufen</button></div></div>`;
-  el.querySelector('[data-a=todo]')?.addEventListener('click', () => run(todo));
-  el.querySelector('[data-a=all]').onclick = () => run(chs);
+  const depth = () => DEPTH[el.querySelector('#depth').value] || DEPTH.normal;
+  el.querySelector('[data-a=todo]')?.addEventListener('click', () => run(todo, depth()));
+  el.querySelector('[data-a=all]').onclick = () => run(chs, depth());
 
-  async function run(list) {
+  async function run(list, per) {
     const batches = [];
-    for (let i = 0; i < list.length; i += 4) batches.push(list.slice(i, i + 4));
+    for (let i = 0; i < list.length; i += 3) batches.push(list.slice(i, i + 3));
     let b = 0;
-    const next = async () => {
-      if (b >= batches.length) {
-        store.update(s => { s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId).assessment = { at: Date.now() }; });
-        el.innerHTML = `<div class="card" style="text-align:center"><h3>Einstufung abgeschlossen</h3><p>Dein Lernplan rechnet jetzt mit deinem echten Kenntnisstand.</p><a class="btn" href="#/fach/${subId}/pruefung/${examId}">Zum Lernplan</a></div>`;
-        return;
-      }
-      const batch = batches[b];
-      el.innerHTML = busy(`Erstelle Fragen (Block ${b + 1} von ${batches.length}) …`);
-      let qs;
-      try {
-        const r = await completeJson({
-          model: 'smart', maxTokens: 5000,
-          system: 'Du erstellst kurze Diagnosefragen, um den Kenntnisstand pro Kapitel einzuschätzen. Nur Stoff aus den Zusammenfassungen.',
-          messages: [{ role: 'user', content: `Erstelle für JEDES der folgenden Kapitel genau 3 Multiple-Choice-Fragen mit je 4 Optionen (eine richtig): zwei Fragen zum BASISWISSEN (eine Verständnisfrage, eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und eine Frage zur VERTIEFUNG (Spezialwissen).\nJSON: {"fragen":[{"kapitelId":"…","frage":"…","optionen":["…","…","…","…"],"richtig":0-3,"erklaerung":"kurz","ebene":"basis|vertiefung"}]}\n\n${batch.map(summaryDigest).join('\n\n').slice(0, 120000)}` }]
-        });
-        qs = (r.fragen || []).filter(q => q.optionen?.length >= 2 && batch.some(c => c.id === q.kapitelId)).map(q => ({ ...q, opts: shuffle(q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }))) }));
-        if (!qs.length) throw new Error('Keine Fragen erhalten');
-      } catch (e) { el.innerHTML = errorBox(e) + '<button class="btn small" data-a="r">Nochmal</button>'; el.querySelector('[data-a=r]').onclick = next; return; }
-      const score = {};
-      let i = 0;
+
+    // Fragen eines Blocks stellen; liefert score[kapitelId] = { basis:[r,n], vertiefung:[r,n] }
+    const ask = (qs, score, label) => new Promise(resolve => {
+      let i = 0, guess = false;
       const show = () => {
-        if (i >= qs.length) {
-          store.update(s => {
-            for (const c of batch) {
-              const sc = score[c.id]; if (!sc) continue;
-              const p = s.progress.chapters[c.id] || (s.progress.chapters[c.id] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 });
-              const f = k => sc[k][1] ? sc[k][0] / sc[k][1] : null;
-              p.levels = { basis: f('basis'), vertiefung: f('vertiefung') };
-              p.mastery = combineLevels(p.levels); p.assessed = true; p.assessedAt = Date.now();
-              setBaseline(p);
-            }
-          });
-          b++;
-          el.innerHTML = `<div class="card" style="text-align:center"><p>Block ${b} von ${batches.length} geschafft.</p>${batch.map(c => { const sc = score[c.id]; if (!sc) return ''; const m = combineLevels({ basis: sc.basis[1] ? sc.basis[0] / sc.basis[1] : null, vertiefung: sc.vertiefung[1] ? sc.vertiefung[0] / sc.vertiefung[1] : null }); return `<div class="row" style="justify-content:center"><span class="dot ${ampel(m, true)}"></span><span class="small">${esc(c.title)}: Basis ${sc.basis[0]}/${sc.basis[1]} · Vertiefung ${sc.vertiefung[0]}/${sc.vertiefung[1]}</span></div>`; }).join('')}
-            <div class="row" style="justify-content:center;margin-top:12px">${b < batches.length ? '<button class="btn" data-a="go">Weiter</button>' : '<button class="btn" data-a="go">Abschließen</button>'}<a class="btn secondary" href="#/fach/${subId}/pruefung/${examId}">Pause</a></div></div>`;
-          el.querySelector('[data-a=go]').onclick = next;
-          return;
-        }
+        if (i >= qs.length) { resolve(); return; }
         const q = qs[i];
-        const ch = batch.find(c => c.id === q.kapitelId);
-        el.innerHTML = `<div class="card"><div class="small muted">Block ${b + 1}/${batches.length} · Frage ${i + 1}/${qs.length} · ${esc(ch?.title || '')} ${lvlPill(q)}</div>
+        const ch = list.find(c => c.id === q.kapitelId);
+        guess = false;
+        el.innerHTML = `<div class="card"><div class="small muted">${esc(label)} · Frage ${i + 1}/${qs.length} · ${esc(ch?.title || '')} ${lvlPill(q)}</div>
+          <div class="progress" style="margin:8px 0 12px"><div style="width:${(i / qs.length) * 100}%"></div></div>
           <div class="item-title" style="margin:10px 0;font-size:1.05rem">${enrich(esc(q.frage))}</div>
           ${q.opts.map((o, k) => `<button class="mc-option" data-k="${k}">${enrich(esc(o.text))}</button>`).join('')}
-          <button class="mc-option" data-k="-1" style="color:var(--muted)">Weiß ich nicht</button><div id="fb"></div></div>`;
+          <div class="row" style="margin-top:6px"><button class="btn ghost small" data-guess>🎲 Ich rate</button><button class="mc-option" data-k="-1" style="color:var(--muted);flex:1;margin:0">Weiß ich nicht</button></div><div id="fb"></div></div>`;
+        el.querySelector('[data-guess]').onclick = e => { guess = !guess; e.target.closest('button').classList.toggle('on', guess); e.target.closest('button').textContent = guess ? '🎲 geraten ✓' : '🎲 Ich rate'; };
         el.querySelectorAll('.mc-option').forEach(btn => btn.onclick = () => {
           const k = +btn.dataset.k;
           const ok = k >= 0 && q.opts[k].ok;
-          addLevel(score, q.kapitelId, q, ok);
+          const l = lvlOf(q);
+          score[q.kapitelId] = score[q.kapitelId] || { basis: [0, 0], vertiefung: [0, 0] };
+          score[q.kapitelId][l][1]++;
+          if (ok) score[q.kapitelId][l][0] += guess ? 0.5 : 1;
           el.querySelectorAll('.mc-option').forEach((bb, j) => { bb.disabled = true; if (j < q.opts.length && q.opts[j].ok) bb.classList.add('correct'); else if (+bb.dataset.k === k) bb.classList.add('wrong'); });
-          el.querySelector('#fb').innerHTML = `<div class="small" style="margin:10px 0">${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
+          el.querySelector('#fb').innerHTML = `<div class="small" style="margin:10px 0">${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span> ` : ''}${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
           el.querySelector('[data-a=n]').onclick = () => { i++; show(); };
         });
       };
       show();
+    });
+
+    const next = async () => {
+      if (b >= batches.length) {
+        store.update(s => { s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId).assessment = { at: Date.now() }; });
+        el.innerHTML = `<div class="card" style="text-align:center"><h3>Einstufung abgeschlossen</h3><p>Dein Lernplan rechnet jetzt mit deinem Kenntnisstand. Die Werte werden mit jedem weiteren Test, jeder Karteikarte und jedem Fall genauer.</p><a class="btn" href="#/fach/${subId}/pruefung/${examId}">Zum Lernplan</a></div>`;
+        return;
+      }
+      const batch = batches[b];
+      el.innerHTML = busy(`Erstelle Fragen aus dem Lehrbuchtext (Block ${b + 1} von ${batches.length}) …`);
+      const score = {};
+      try {
+        const qs = await makeQuestions(sub, batch, per);
+        if (!qs.length) throw new Error('Keine Fragen erhalten');
+        await ask(qs, score, `Block ${b + 1}/${batches.length}`);
+        // Unklare Kapitel: gezielte Nachfragen
+        const unclear = batch.filter(c => { const sc = score[c.id]; if (!sc || !sc.basis[1]) return false; const f = sc.basis[0] / sc.basis[1]; return f > 0.2 && f < 0.85; });
+        if (unclear.length && per.extra) {
+          el.innerHTML = busy(`Ein paar Nachfragen zu ${unclear.length} Kapitel(n), damit die Einstufung sicher ist …`);
+          const qs2 = await makeQuestions(sub, unclear, { basis: per.extra, vert: 0 });
+          if (qs2.length) await ask(qs2, score, 'Nachfragen');
+        }
+      } catch (e) { el.innerHTML = errorBox(e) + '<button class="btn small" data-a="r">Nochmal</button>'; el.querySelector('[data-a=r]').onclick = next; return; }
+
+      store.update(s => {
+        for (const c of batch) {
+          const sc = score[c.id]; if (!sc) continue;
+          const p = s.progress.chapters[c.id] || (s.progress.chapters[c.id] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 });
+          p.levels = {
+            basis: sc.basis[1] ? smoothed(sc.basis[0], sc.basis[1], 'basis') : null,
+            vertiefung: sc.vertiefung[1] ? smoothed(sc.vertiefung[0], sc.vertiefung[1], 'vertiefung') : null
+          };
+          p.assessN = sc.basis[1] + sc.vertiefung[1];
+          p.mastery = combineLevels(p.levels); p.assessed = true; p.assessedAt = Date.now();
+          setBaseline(p);
+        }
+      });
+      b++;
+      el.innerHTML = `<div class="card" style="text-align:center"><p>Block ${b} von ${batches.length} geschafft.</p>${batch.map(c => { const sc = score[c.id]; if (!sc) return ''; const p = store.state.progress.chapters[c.id]; return `<div class="row" style="justify-content:center"><span class="dot ${ampel(p.mastery, true)}"></span><span class="small">${esc(c.title)}: Basis ${sc.basis[0]}/${sc.basis[1]} · Vertiefung ${sc.vertiefung[0]}/${sc.vertiefung[1]}</span></div>`; }).join('')}
+        <p class="tiny muted">Die Einstufung ist bewusst vorsichtig: Einzelne Treffer oder Fehler verschieben das Ergebnis nur begrenzt.</p>
+        <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-a="go">${b < batches.length ? 'Weiter' : 'Abschließen'}</button><a class="btn secondary" href="#/fach/${subId}/pruefung/${examId}">Pause</a></div></div>`;
+      el.querySelector('[data-a=go]').onclick = next;
     };
     next();
   }
