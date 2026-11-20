@@ -158,7 +158,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
     <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %${p.levels ? ' (' + levelText(p) + ')' : ''}` : 'noch nicht eingestuft'}</span></div>
     ${isStudyChapter(ch) ? '' : `<div class="notice warn small">Dieses Kapitel zählt nicht als Lernstoff (z. B. Verzeichnis oder Übersicht) und kommt in Plan, Einstufung und Tests nicht vor. <button class="btn ghost small" data-vis="show">Doch als Lernstoff zählen</button></div>`}
     <div class="tabs">${parts.map(([k, l]) => `<a class="tab ${k === part ? 'active' : ''}" href="#/fach/${subId}/kapitel/${chId}/${k}">${l}</a>`).join('')}</div><div id="part"></div>
-    ${isStudyChapter(ch) ? `<div style="margin-top:16px"><button class="btn ghost small" data-vis="hide">Kein Lernstoff – Kapitel ausblenden</button></div>` : ''}`;
+    ${isStudyChapter(ch) ? `<div class="row" style="margin-top:16px">${(() => { const ex = activeExams(sub)[0]; return ex && ch.summary ? `<a class="btn secondary small" href="#/fach/${subId}/einstufung/${ex.id}/${chId}">${p?.assessed ? 'Kapitel neu einstufen' : 'Dieses Kapitel einstufen'}</a>` : ''; })()}<button class="btn ghost small" data-vis="hide">Kein Lernstoff – Kapitel ausblenden</button></div>` : ''}`;
   el.querySelectorAll('[data-vis]').forEach(b => b.onclick = () => {
     store.update(s => { findChapter(s.subjects.find(x => x.id === subId), chId).chapter.hidden = b.dataset.vis === 'hide'; });
     toast(b.dataset.vis === 'hide' ? 'Ausgeblendet – zählt nicht mehr als Lernstoff' : 'Zählt wieder als Lernstoff');

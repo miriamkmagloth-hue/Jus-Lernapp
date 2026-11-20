@@ -20,7 +20,7 @@ const routes = [
   [/^#\/fach\/([^/]+)\/urteil\/([^/]+)(?:\/([^/]+))?$/, subj.rulingView, 'faecher'],
   [/^#\/fach\/([^/]+)\/altklausur\/([^/]+)$/, subj.altklausurView, 'faecher'],
   [/^#\/fach\/([^/]+)\/pruefung\/([^/]+)$/, subj.examView, 'faecher'],
-  [/^#\/fach\/([^/]+)\/einstufung\/([^/]+)$/, learn.assessmentView, 'faecher'],
+  [/^#\/fach\/([^/]+)\/einstufung\/([^/]+)(?:\/([^/]+))?$/, learn.assessmentView, 'faecher'],
   [/^#\/fach\/([^/]+)\/fall(?:\/([^/]+))?$/, learn.caseView, 'faecher'],
   [/^#\/fach\/([^/]+)\/simulation\/([^/]+)$/, learn.oralView, 'faecher'],
   [/^#\/fach\/([^/]+)(?:\/([^/]+))?$/, subj.subjectView, 'faecher'],

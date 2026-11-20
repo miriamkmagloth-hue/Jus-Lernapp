@@ -487,7 +487,7 @@ async function makeQuestions(sub, chapters, per) {
   return (r.fragen || []).filter(q => q.optionen?.length >= 2 && chapters.some(c => c.id === q.kapitelId)).map(q => ({ ...q, opts: shuffle(q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }))) }));
 }
 
-export function assessmentView(el, subId, examId) {
+export function assessmentView(el, subId, examId, onlyChapter) {
   const sub = store.subject(subId);
   const exam = sub?.exams.find(e => e.id === examId);
   if (!exam) return;
@@ -495,19 +495,52 @@ export function assessmentView(el, subId, examId) {
   noRerender(el);
   const chs = allChapters(sub, { exam }).filter(c => c.summary && (!exam.scopeMap || exam.scopeMap[c.id] !== 'raus'));
   const prog = store.state.progress.chapters;
-  const todo = chs.filter(c => !prog[c.id]?.assessed);
   if (!chs.length) { el.innerHTML = '<div class="card">Zuerst müssen die Lehrbücher verarbeitet sein (Zusammenfassungen).</div>'; return; }
-  el.innerHTML = `<div class="card"><h3>Einstufungstest: ${esc(exam.name)}</h3>
-    <p>Die App stellt pro Kapitel mehrere präzise Fragen aus dem Lehrbuchtext – zu Basis- und Vertiefungswissen. Ist das Ergebnis eines Kapitels nicht eindeutig, kommen gezielte Nachfragen. So entscheidet nicht Glück oder Pech über die Einstufung.</p>
-    <label class="field"><span>Genauigkeit</span><select id="depth">${Object.entries(DEPTH).map(([k, d]) => `<option value="${k}">${esc(d.label)}</option>`).join('')}</select></label>
-    <p class="small muted">Wenn du etwas nicht weißt, wähle „Weiß ich nicht“. Hast du nur geraten, tippe vor dem Antworten auf „🎲 Ich rate“ – geratene Treffer zählen nur halb. Du kannst nach jedem Block pausieren.</p>
-    <p class="small">${chs.length} Kapitel im Prüfungsstoff · ${chs.length - todo.length} schon eingestuft</p>
-    <div class="row">${todo.length ? `<button class="btn" data-a="todo">Weiter mit ${todo.length} offenen Kapiteln</button>` : ''}<button class="btn ${todo.length ? 'secondary' : ''}" data-a="all">Alle ${todo.length ? 'neu ' : ''}einstufen</button></div></div>`;
-  const depth = () => DEPTH[el.querySelector('#depth').value] || DEPTH.normal;
-  el.querySelector('[data-a=todo]')?.addEventListener('click', () => run(todo, depth()));
-  el.querySelector('[data-a=all]').onclick = () => run(chs, depth());
+  let per = DEPTH[sessionStorage.getItem('assessDepth')] || DEPTH.normal;
+  if (onlyChapter) {
+    const c = chs.find(x => x.id === onlyChapter) || allChapters(sub).find(x => x.id === onlyChapter);
+    if (c) { run([c], per, { title: c.title }); return; }
+  }
 
-  async function run(list, per) {
+  // Aufteilung: pro Lehrbuch, darin Teile mit höchstens 8 Kapiteln
+  const parts = [];
+  const byBook = new Map();
+  chs.forEach(c => { if (!byBook.has(c.bookId)) byBook.set(c.bookId, { title: c.bookTitle, chapters: [] }); byBook.get(c.bookId).chapters.push(c); });
+  for (const [bookId, b] of byBook) {
+    const n = Math.ceil(b.chapters.length / 8);
+    const size = Math.ceil(b.chapters.length / n);
+    for (let i = 0; i < n; i++) {
+      const list = b.chapters.slice(i * size, (i + 1) * size);
+      parts.push({ key: bookId + ':' + i, book: b.title, label: n > 1 ? `Teil ${i + 1} von ${n}` : 'Alle Kapitel', list, first: list[0]?.title, last: list[list.length - 1]?.title });
+    }
+  }
+  const doneCount = p => p.list.filter(c => prog[c.id]?.assessed).length;
+  const nextPart = parts.find(p => doneCount(p) < p.list.length);
+  const totalDone = chs.filter(c => prog[c.id]?.assessed).length;
+  const minutes = p => Math.round(p.list.length * (per.basis + per.vert) * 0.6);
+
+  el.innerHTML = `<div class="card"><h3>Einstufungstest: ${esc(exam.name)}</h3>
+    <p class="small">Aufgeteilt nach Lehrbüchern in überschaubare Teile. Mach einen Teil, wann es dir passt – der Lernplan rechnet sofort mit jedem fertigen Teil.</p>
+    <div class="progress green" style="margin:8px 0 4px"><div style="width:${Math.round(100 * totalDone / chs.length)}%"></div></div>
+    <div class="tiny muted">${totalDone} von ${chs.length} Kapiteln eingestuft</div>
+    <label class="field" style="margin-top:12px"><span>Genauigkeit</span><select id="depth">${Object.entries(DEPTH).map(([k, d]) => `<option value="${k}" ${DEPTH[k] === per ? 'selected' : ''}>${esc(d.label)}</option>`).join('')}</select></label>
+    ${nextPart ? `<button class="btn block" data-part="${nextPart.key}">▶ Als Nächstes: ${esc(nextPart.book)} – ${esc(nextPart.label)} <span class="tiny" style="opacity:.8">(ca. ${minutes(nextPart)} Min)</span></button>` : '<div class="notice ok small">Alles eingestuft. Du kannst einzelne Teile jederzeit wiederholen.</div>'}
+    <p class="small muted" style="margin-top:10px">Wenn du etwas nicht weißt, wähle „Weiß ich nicht“. Hast du nur geraten, tippe vorher auf „🎲 Ich rate“ – geratene Treffer zählen nur halb.</p></div>
+    ${[...byBook.values()].map(b => `<div class="card"><h3>📘 ${esc(b.title)}</h3><ul class="list">${parts.filter(p => p.book === b.title).map(p => {
+      const d = doneCount(p);
+      const avg = d ? p.list.filter(c => prog[c.id]?.assessed).reduce((a, c) => a + prog[c.id].mastery, 0) / d : 0;
+      return `<li><div class="row between"><div style="flex:1;min-width:0"><div class="item-title">${esc(p.label)} ${d === p.list.length ? `<span class="dot ${ampel(avg, true)}"></span>` : ''}</div>
+        <div class="tiny muted">${p.list.length} Kapitel: ${esc(p.first)}${p.list.length > 1 ? ' … ' + esc(p.last) : ''} · ${d}/${p.list.length} eingestuft · ca. ${minutes(p)} Min</div></div>
+        <button class="btn ${d === p.list.length ? 'secondary' : ''} small" data-part="${p.key}">${d === 0 ? 'Starten' : d < p.list.length ? 'Weiter' : 'Wiederholen'}</button></div></li>`;
+    }).join('')}</ul></div>`).join('')}`;
+  el.querySelector('#depth').onchange = e => { sessionStorage.setItem('assessDepth', e.target.value); per = DEPTH[e.target.value]; assessmentView(el, subId, examId); };
+  el.querySelectorAll('[data-part]').forEach(b => b.onclick = () => {
+    const p = parts.find(x => x.key === b.dataset.part);
+    const open = p.list.filter(c => !prog[c.id]?.assessed);
+    run(open.length ? open : p.list, per, { title: `${p.book} – ${p.label}` });
+  });
+
+  async function run(list, per, info = {}) {
     const batches = [];
     for (let i = 0; i < list.length; i += 3) batches.push(list.slice(i, i + 3));
     let b = 0;
@@ -541,17 +574,24 @@ export function assessmentView(el, subId, examId) {
       show();
     });
 
+    // Fragen für den nächsten Block schon im Hintergrund erstellen
+    const pending = {};
+    const prepare = i => { if (i < batches.length && !pending[i]) { pending[i] = makeQuestions(sub, batches[i], per); pending[i].catch(() => {}); } return pending[i]; };
     const next = async () => {
       if (b >= batches.length) {
-        store.update(s => { s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId).assessment = { at: Date.now() }; });
-        el.innerHTML = `<div class="card" style="text-align:center"><h3>Einstufung abgeschlossen</h3><p>Dein Lernplan rechnet jetzt mit deinem Kenntnisstand. Die Werte werden mit jedem weiteren Test, jeder Karteikarte und jedem Fall genauer.</p><a class="btn" href="#/fach/${subId}/pruefung/${examId}">Zum Lernplan</a></div>`;
+        const allDone = allChapters(sub, { exam }).filter(c => c.summary).every(c => store.state.progress.chapters[c.id]?.assessed);
+        store.update(s => { const ex = s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId); if (allDone || !ex.assessment) ex.assessment = { at: Date.now(), partial: !allDone }; });
+        el.innerHTML = `<div class="card" style="text-align:center"><h3>${esc(info.title || 'Teil')} geschafft 🎉</h3><p>Der Lernplan rechnet ab sofort mit diesen Ergebnissen. Die Werte werden mit jedem weiteren Test, jeder Karteikarte und jedem Fall genauer.</p>
+          <div class="row" style="justify-content:center"><a class="btn" href="#/fach/${subId}/einstufung/${examId}">Zur Übersicht der Teile</a><a class="btn secondary" href="#/fach/${subId}/pruefung/${examId}">Zum Lernplan</a></div></div>`;
+        el.removeAttribute('data-no-rerender');
         return;
       }
       const batch = batches[b];
       el.innerHTML = busy(`Erstelle Fragen aus dem Lehrbuchtext (Block ${b + 1} von ${batches.length}) …`);
       const score = {};
       try {
-        const qs = await makeQuestions(sub, batch, per);
+        const qs = await prepare(b);
+        prepare(b + 1);
         if (!qs.length) throw new Error('Keine Fragen erhalten');
         await ask(qs, score, `Block ${b + 1}/${batches.length}`);
         // Unklare Kapitel: gezielte Nachfragen
@@ -561,7 +601,7 @@ export function assessmentView(el, subId, examId) {
           const qs2 = await makeQuestions(sub, unclear, { basis: per.extra, vert: 0 });
           if (qs2.length) await ask(qs2, score, 'Nachfragen');
         }
-      } catch (e) { el.innerHTML = errorBox(e) + '<button class="btn small" data-a="r">Nochmal</button>'; el.querySelector('[data-a=r]').onclick = next; return; }
+      } catch (e) { delete pending[b]; el.innerHTML = errorBox(e) + '<button class="btn small" data-a="r">Nochmal</button>'; el.querySelector('[data-a=r]').onclick = next; return; }
 
       store.update(s => {
         for (const c of batch) {
@@ -577,9 +617,9 @@ export function assessmentView(el, subId, examId) {
         }
       });
       b++;
-      el.innerHTML = `<div class="card" style="text-align:center"><p>Block ${b} von ${batches.length} geschafft.</p>${batch.map(c => { const sc = score[c.id]; if (!sc) return ''; const p = store.state.progress.chapters[c.id]; return `<div class="row" style="justify-content:center"><span class="dot ${ampel(p.mastery, true)}"></span><span class="small">${esc(c.title)}: Basis ${sc.basis[0]}/${sc.basis[1]} · Vertiefung ${sc.vertiefung[0]}/${sc.vertiefung[1]}</span></div>`; }).join('')}
+      el.innerHTML = `<div class="card" style="text-align:center"><p>${esc(info.title || '')}<br>Block ${b} von ${batches.length} geschafft.</p>${batch.map(c => { const sc = score[c.id]; if (!sc) return ''; const p = store.state.progress.chapters[c.id]; return `<div class="row" style="justify-content:center"><span class="dot ${ampel(p.mastery, true)}"></span><span class="small">${esc(c.title)}: Basis ${sc.basis[0]}/${sc.basis[1]} · Vertiefung ${sc.vertiefung[0]}/${sc.vertiefung[1]}</span></div>`; }).join('')}
         <p class="tiny muted">Die Einstufung ist bewusst vorsichtig: Einzelne Treffer oder Fehler verschieben das Ergebnis nur begrenzt.</p>
-        <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-a="go">${b < batches.length ? 'Weiter' : 'Abschließen'}</button><a class="btn secondary" href="#/fach/${subId}/pruefung/${examId}">Pause</a></div></div>`;
+        <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-a="go">${b < batches.length ? 'Weiter' : 'Abschließen'}</button><a class="btn secondary" href="#/fach/${subId}/einstufung/${examId}">Pause</a></div></div>`;
       el.querySelector('[data-a=go]').onclick = next;
     };
     next();
