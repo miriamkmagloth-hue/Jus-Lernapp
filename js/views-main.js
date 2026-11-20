@@ -180,7 +180,7 @@ export function subjectEditor(el, subId) {
     if (a === 'save') {
       collect();
       if (!draft.name) { toast('Bitte einen Namen eingeben'); return; }
-      draft.exams.forEach(e => { e.attempts = e.attempts.filter((x, i) => i === 0 || x.date); syncExam(e); });
+      draft.exams.forEach(e => syncExam(e));
       store.update(s => {
         const i = s.subjects.findIndex(x => x.id === draft.id);
         if (i >= 0) s.subjects[i] = draft; else s.subjects.push(draft);

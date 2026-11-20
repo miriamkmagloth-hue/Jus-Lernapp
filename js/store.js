@@ -146,7 +146,7 @@ export function syncExam(e) {
   if (!Array.isArray(e.attempts) || !e.attempts.length) {
     e.attempts = [{ date: e.date || '', result: e.status === 'bestanden' ? 'bestanden' : e.status === 'nicht_bestanden' ? 'nicht_bestanden' : 'offen' }];
   }
-  e.attempts = e.attempts.filter((a, i) => a.date || i === 0).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+  e.attempts = e.attempts.sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
   const open = e.attempts.find(a => a.result === 'offen');
   e.date = (open || e.attempts[e.attempts.length - 1]).date || '';
   if (e.attempts.some(a => a.result === 'bestanden')) e.status = 'bestanden';

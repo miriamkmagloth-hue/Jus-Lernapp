@@ -56,7 +56,9 @@ function tabPlan(el, sub) {
       ${e.status === 'aktiv' ? `<span class="pill ${cls}">${{ gut: 'Zeit reicht', knapp: 'knapp', eng: 'priorisiert', offen: 'offen', vorbei: 'vorbei' }[plan.status]}</span>` : `<span class="pill ${e.status === 'bestanden' ? 'green' : ''}">${{ bestanden: 'bestanden ✓', nicht_bestanden: 'nicht bestanden', archiviert: 'pausiert' }[e.status]}</span>`}</div>
       ${(e.attempts || []).length > 1 ? `<div class="tiny muted" style="margin-top:4px">${e.attempts.map((a, j) => `${j === 0 ? 'Haupttermin' : j + '. Ersatztermin'}: ${a.date ? fmtDate(a.date) : 'offen'}${a.result === 'bestanden' ? ' ✓' : a.result === 'nicht_bestanden' ? ' ✗' : ''}`).join(' · ')}</div>` : ''}
       ${e.status === 'aktiv' && plan.status === 'vorbei' && currentAttempt(e) ? `<div class="notice gold"><strong>Wie ist die Prüfung am ${fmtDate(e.date)} gelaufen?</strong><div class="row" style="margin-top:8px"><button class="btn small" data-res="bestanden" data-ex="${e.id}">Bestanden 🎉</button><button class="btn secondary small" data-res="nicht_bestanden" data-ex="${e.id}">Nicht bestanden</button></div></div>` : ''}
-      ${e.status === 'nicht_bestanden' ? `<div class="notice"><div class="small">Kein weiterer Termin eingetragen.</div><a class="btn small" style="margin-top:6px" href="#/fach/${sub.id}/bearbeiten">+ Ersatztermin eintragen</a></div>` : ''}
+      ${e.status === 'nicht_bestanden' || (e.status === 'aktiv' && currentAttempt(e) && !e.date) ? `<div class="notice"><div class="small"><strong>${e.status === 'nicht_bestanden' ? 'Ersatztermin eintragen' : 'Ersatztermin noch offen'}</strong> – sobald du ihn weißt, hier eintragen. Dein Lernstand bleibt erhalten.</div>
+        <div class="row" style="margin-top:8px"><input type="date" data-newdate="${e.id}" style="flex:1;min-width:150px"><button class="btn small" data-savedate="${e.id}">Speichern</button></div>
+        ${e.status === 'nicht_bestanden' ? `<button class="btn ghost small" data-unknown="${e.id}" style="margin-top:4px">Termin noch nicht bekannt</button>` : ''}</div>` : ''}
       ${e.status === 'aktiv' ? `<p class="small">${esc(plan.message)}</p>
       ${e.assessment ? '' : `<div class="notice small">Tipp: Mach zuerst den <strong>Einstufungstest</strong>. Dann weiß die App, was du schon kannst, und plant realistisch.</div>`}
       ${plan.today.length ? `<h4>Heute sinnvoll</h4><ul class="list">${plan.today.map(t => `<li><a class="item" href="#/fach/${sub.id}/kapitel/${t.id}"><span class="dot ${ampel(t.mastery, t.assessed)}"></span><div><div>${esc(t.title)}</div><div class="small muted">${esc(t.action)} · ca. ${fmtMin(t.min)}</div></div><span class="chev">›</span></a></li>`).join('')}</ul>` : ''}
@@ -67,6 +69,19 @@ function tabPlan(el, sub) {
   if (!exams.length) html += `<div class="card muted">Keine Prüfungen eingetragen. <a href="#/fach/${sub.id}/bearbeiten">Prüfungen anlegen</a></div>`;
   html += `<div class="row"><a class="btn secondary small" href="#/fach/${sub.id}/bearbeiten">Fach, Prüfungen & Ordner bearbeiten</a></div>`;
   el.innerHTML = html;
+  const setRetake = (examId, date) => store.update(s => {
+    const ex = s.subjects.find(x => x.id === sub.id).exams.find(x => x.id === examId);
+    const open = currentAttempt(ex);
+    if (open && !open.date) open.date = date; else ex.attempts.push({ date, result: 'offen' });
+    if (ex.status === 'nicht_bestanden') ex.status = 'aktiv';
+    syncExam(ex);
+  });
+  el.querySelectorAll('[data-savedate]').forEach(b => b.onclick = () => {
+    const v = el.querySelector(`[data-newdate="${b.dataset.savedate}"]`).value;
+    if (!v) { toast('Bitte ein Datum wählen'); return; }
+    setRetake(b.dataset.savedate, v); toast('Ersatztermin gespeichert – der Plan rechnet jetzt damit.'); render();
+  });
+  el.querySelectorAll('[data-unknown]').forEach(b => b.onclick = () => { setRetake(b.dataset.unknown, ''); toast('Vorgemerkt. Trag den Termin ein, sobald du ihn weißt.'); render(); });
   el.querySelectorAll('[data-res]').forEach(b => b.onclick = () => {
     store.update(s => {
       const ex = s.subjects.find(x => x.id === sub.id).exams.find(x => x.id === b.dataset.ex);
@@ -74,6 +89,7 @@ function tabPlan(el, sub) {
       syncExam(ex);
     });
     if (b.dataset.res === 'bestanden') toast('Gratuliere! 🎉');
+    else if (!currentAttempt(store.subject(sub.id).exams.find(x => x.id === b.dataset.ex))) { render(); return; }
     else toast(currentAttempt(store.subject(sub.id).exams.find(x => x.id === b.dataset.ex)) ? 'Der Plan rechnet jetzt mit dem Ersatztermin. Dein Lernstand bleibt erhalten.' : 'Trag einen Ersatztermin ein, dann plant die App weiter.', 5000);
     render();
   });
