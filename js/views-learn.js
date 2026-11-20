@@ -248,6 +248,7 @@ export function caseView(el, subId, preset) {
   noRerender(el);
   const saved = sessionStorage.getItem('case:' + subId);
   if (preset && preset.startsWith('alt:')) return startFromAlt(preset);
+  if (preset && preset.startsWith('fs:')) return startFromCollection(preset);
   if (saved && !preset) {
     try { const c = JSON.parse(saved); if (c && !c.graded) return solve(c); } catch {}
   }
@@ -290,6 +291,21 @@ export function caseView(el, subId, preset) {
       sessionStorage.setItem('case:' + subId, JSON.stringify(c));
       solve(c);
     } catch (e) { el.innerHTML = errorBox(e) + '<button class="btn secondary small" data-a="b">Zurück</button>'; el.querySelector('[data-a=b]').onclick = setup; }
+  }
+
+  function startFromCollection(p) {
+    const [, fileId, chId, idx] = p.split(':');
+    const b = sub.books.find(x => x.fileId === fileId);
+    const f = b?.chapters.find(c => c.id === chId)?.cases?.[+idx];
+    if (!f) { el.innerHTML = '<div class="card">Fall nicht gefunden.</div>'; return; }
+    const c = { titel: `${f.titel || 'Fall'} (${b.title})`, sachverhalt: f.sachverhalt || '', fallfrage: (f.fragen || []).join('\n'), kapitelIds: f.kapitelIds || [], loesung: { ansprueche: f.ansprueche || [], skizze: f.loesung, stolperfallen: f.stolperfallen || [] }, cfg: { mode: 'voll', minutes: 0, level: 'Fallsammlung' }, startedAt: Date.now(), answer: '', rows: [] };
+    showStart(c);
+  }
+
+  function showStart(c) {
+    el.innerHTML = `<div class="card"><h3>${esc(c.titel)}</h3><label class="field"><span>Modus</span><select id="mode"><option value="ansprueche">Anspruchstraining</option><option value="voll" selected>Volle Falllösung</option></select></label>
+      <label class="field"><span>Zeitlimit</span><select id="time"><option value="0">ohne</option><option value="20">20 Min</option><option value="45">45 Min</option><option value="90">90 Min</option></select></label><button class="btn" data-a="go">Starten</button></div>`;
+    el.querySelector('[data-a=go]').onclick = () => { c.cfg.mode = el.querySelector('#mode').value; c.cfg.minutes = +el.querySelector('#time').value; c.startedAt = Date.now(); sessionStorage.setItem('case:' + subId, JSON.stringify(c)); solve(c); };
   }
 
   async function startFromAlt(p) {

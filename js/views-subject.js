@@ -1,5 +1,5 @@
 // Ansichten innerhalb eines Fachs
-import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam } from './store.js';
+import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam, collectionCases } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL } from './planner.js';
@@ -101,13 +101,19 @@ function tabStoff(el, sub) {
   const prog = store.state.progress.chapters;
   if (!sub.books.length) { el.innerHTML = `<div class="card empty">Noch keine Lehrbücher. Wähle den Lehrbuch-Ordner unter <a href="#/fach/${sub.id}/bearbeiten">Fach bearbeiten</a>.</div>`; return; }
   const exam = activeExams(sub)[0];
-  const roleOrder = { stoff: 0, nachschlag: 1, aus: 2 };
+  const roleOrder = { stoff: 0, faelle: 1, nachschlag: 2, aus: 3 };
   const books = [...sub.books].sort((a, b) => roleOrder[bookRole(a)] - roleOrder[bookRole(b)]);
-  el.innerHTML = `<div class="notice small">Leg pro Buch fest, wofür es da ist: <strong>Lernstoff</strong> wird zusammengefasst und abgefragt, <strong>Nachschlagewerk</strong> (z. B. Gesetzestext) wird nur eingelesen, damit du Paragraphen antippen kannst, <strong>Nicht verwenden</strong> wird ignoriert. Welche Bücher zu welcher Prüfung gehören, stellst du im Lernplan der Prüfung ein.</div>` + books.map(b => {
+  el.innerHTML = `<div class="notice small">Leg pro Buch fest, wofür es da ist: <strong>Lernstoff</strong> wird zusammengefasst und abgefragt, <strong>Fallsammlung</strong>: Fälle samt Buchlösung werden herausgelöst und den Lehrbuchkapiteln zugeordnet, <strong>Nachschlagewerk</strong> (z. B. Gesetzestext) wird nur eingelesen, damit du Paragraphen antippen kannst, <strong>Nicht verwenden</strong> wird ignoriert. Welche Bücher zu welcher Prüfung gehören, stellst du im Lernplan der Prüfung ein.</div>` + books.map(b => {
     const job = jobs.get('book:' + b.fileId);
     const role = bookRole(b);
     const done = b.chapters.filter(c => c.summary).length;
-    const roleSel = `<select data-role="${b.fileId}" style="width:auto;min-height:34px;padding:4px 8px;font-size:.85rem"><option value="stoff" ${role === 'stoff' ? 'selected' : ''}>📘 Lernstoff</option><option value="nachschlag" ${role === 'nachschlag' ? 'selected' : ''}>📖 Nachschlagewerk</option><option value="aus" ${role === 'aus' ? 'selected' : ''}>⛔ Nicht verwenden</option></select>`;
+    const roleSel = `<select data-role="${b.fileId}" style="width:auto;min-height:34px;padding:4px 8px;font-size:.85rem"><option value="stoff" ${role === 'stoff' ? 'selected' : ''}>📘 Lernstoff</option><option value="faelle" ${role === 'faelle' ? 'selected' : ''}>📝 Fallsammlung</option><option value="nachschlag" ${role === 'nachschlag' ? 'selected' : ''}>📖 Nachschlagewerk</option><option value="aus" ${role === 'aus' ? 'selected' : ''}>⛔ Nicht verwenden</option></select>`;
+    if (role === 'faelle') {
+      const nCases = b.chapters.reduce((a, c) => a + (c.cases?.length || 0), 0);
+      const doneF = b.chapters.filter(c => c.cases).length;
+      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)}</div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}${b.status === 'fertig' || (job && !job.done) ? '' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
+        ${nCases ? `<a class="btn secondary small" href="#/fach/${sub.id}/falltraining" style="margin-top:8px">Fälle ansehen und lösen</a>` : ''}</div>`;
+    }
     if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)}</div><div class="small muted">${role === 'aus' ? 'wird nicht verwendet' : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
     return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)}</div><div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
       <div class="row">${roleSel}${b.status === 'fertig' ? '' : job && !job.done ? '<span class="spinner"></span>' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut versuchen' : b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
@@ -122,8 +128,10 @@ function tabStoff(el, sub) {
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
   el.querySelectorAll('[data-role]').forEach(sel => sel.onchange = () => {
     const fid = sel.dataset.role, role = sel.value;
-    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); b.role = role; if (role === 'stoff' && ['nachschlagbar', 'pausiert'].includes(b.status)) b.status = b.chapters?.length ? 'gegliedert' : 'neu'; if (role === 'nachschlag' && b.status !== 'fertig') b.status = 'neu'; });
-    toast(role === 'aus' ? 'Wird nicht verwendet – eine laufende Verarbeitung stoppt nach dem aktuellen Kapitel.' : role === 'nachschlag' ? 'Nachschlagewerk – wird nur eingelesen, nicht zusammengefasst.' : 'Lernstoff – wird verarbeitet.', 5000);
+    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); const before = bookRole(b); b.role = role;
+      if (role === 'nachschlag') { if (b.status !== 'nachschlagbar') b.status = 'neu'; }
+      else if (role !== 'aus' && (before !== role || ['nachschlagbar', 'pausiert'].includes(b.status))) b.status = b.chapters?.length ? 'gegliedert' : 'neu'; });
+    toast({ aus: 'Wird nicht verwendet – eine laufende Verarbeitung stoppt nach dem aktuellen Kapitel.', nachschlag: 'Nachschlagewerk – wird nur eingelesen, nicht zusammengefasst.', faelle: 'Fallsammlung – Fälle werden herausgelöst und den Lehrbuchkapiteln zugeordnet.', stoff: 'Lernstoff – wird verarbeitet.' }[role], 5000);
     queueProcessing(sub.id);
     render();
   });
@@ -170,6 +178,15 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
       ${s.stolperfallen?.length ? `<div class="card" style="border-color:var(--hl)"><h3>⚠ Stolperfallen</h3><ul>${s.stolperfallen.map(x => `<li>${enrich(esc(x.text || x))} ${x.seite ? `<span class="cite">[S. ${esc(String(x.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}</li>`).join('')}</ul></div>` : ''}
       ${s.normen?.length ? `<div class="card"><h3>Normen</h3>${s.normen.map(n => `<span class="pill blue" style="margin:2px">${enrich(esc(n))}</span>`).join(' ')}</div>` : ''}
       ${s.entscheidungen?.length ? `<div class="card"><h3>Im Kapitel zitierte Entscheidungen</h3><div class="row">${s.entscheidungen.map(g => `<button class="btn secondary small" data-gz="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="tiny muted">Antippen: Entscheidung im RIS öffnen und aufbereiten lassen.</p></div>` : ''}
+      ${(() => {
+        const all = collectionCases(sub);
+        const rel = all.filter(x => (x.fall.kapitelIds || []).includes(chId) || (x.fall.aussagen || []).some(a => a.kapitelId === chId));
+        const st = all.flatMap(x => (x.fall.aussagen || []).filter(a => a.kapitelId === chId).map(a => ({ ...a, src: x })));
+        if (!rel.length && !st.length) return '';
+        return `<div class="card"><h3>📝 Aus deinen Fallsammlungen</h3>
+          ${st.length ? `<h4>Das zeigen die Falllösungen zu diesem Kapitel</h4><ul>${st.slice(0, 25).map(a => `<li>${enrich(esc(a.aussage))} ${String(a.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span>' : ''}<span class="tiny muted"> – ${esc(a.src.fall.titel || '')}</span></li>`).join('')}</ul>` : ''}
+          ${rel.length ? `<h4>Fälle zu diesem Kapitel</h4><ul class="list">${rel.slice(0, 20).map(x => `<li><a class="item" href="#/fach/${subId}/fall/${encodeURIComponent('fs:' + x.book.fileId + ':' + x.chapter.id + ':' + x.idx)}"><div style="flex:1"><div>${esc(x.fall.titel || 'Fall')}</div><div class="tiny muted">${esc(x.book.title)}${x.fall.schwierigkeit ? ' · ' + esc(x.fall.schwierigkeit) : ''}</div></div><span class="chev">lösen ›</span></a></li>`).join('')}</ul>` : ''}</div>`;
+      })()}
       <div class="row"><a class="btn" href="#/fach/${subId}/kapitel/${chId}/test">Wissen testen</a><button class="btn ghost small" data-a="sum">Neu zusammenfassen</button></div>`;
     }
     body.onclick = async e => {
@@ -283,6 +300,13 @@ function tabCases(el, sub) {
   const cases = (store.state.progress.cases || []).filter(c => c.subId === sub.id).slice(-15).reverse();
   el.innerHTML = `<div class="card"><h3>Fall üben</h3><p class="small muted">Die App erstellt einen Fall aus den Stoffgebieten deiner Lehrbücher. Du kannst nur die Anspruchsgrundlagen suchen oder den ganzen Fall lösen.</p>
     <a class="btn" href="#/fach/${sub.id}/fall">Neuen Fall starten</a></div>
+    ${(() => {
+      const fs = collectionCases(sub);
+      if (!fs.length) return '';
+      const byBook = {};
+      fs.forEach(x => { (byBook[x.book.title] = byBook[x.book.title] || []).push(x); });
+      return `<div class="card"><h3>📝 Fälle aus deinen Fallsammlungen</h3><p class="small muted">Mit der Lösung aus dem Buch als Maßstab für die Korrektur.</p>${Object.entries(byBook).map(([t, list]) => `<details><summary>${esc(t)} (${list.length})</summary><ul class="list">${list.map(x => `<li><a class="item" href="#/fach/${sub.id}/fall/${encodeURIComponent('fs:' + x.book.fileId + ':' + x.chapter.id + ':' + x.idx)}"><div style="flex:1"><div>${esc(x.fall.titel || 'Fall')}</div><div class="tiny muted">${(x.fall.kapitelIds || []).map(id => findChapter(sub, id)?.chapter.title).filter(Boolean).map(esc).join(' · ')}${x.fall.schwierigkeit ? ' · ' + esc(x.fall.schwierigkeit) : ''}</div></div><span class="chev">›</span></a></li>`).join('')}</ul></details>`).join('')}</div>`;
+    })()}
     ${cases.length ? `<div class="card"><h3>Bisherige Fälle</h3><ul class="list">${cases.map(c => `<li><div class="row between"><div><div>${esc(c.title)}</div><div class="tiny muted">${fmtDate(c.at)} · ${c.mode === 'ansprueche' ? 'Anspruchstraining' : 'Falllösung'}</div></div><span class="pill ${c.score >= 0.75 ? 'green' : c.score >= 0.45 ? 'yellow' : 'red'}">${Math.round(c.score * 100)} %</span></div></li>`).join('')}</ul></div>` : ''}`;
 }
 

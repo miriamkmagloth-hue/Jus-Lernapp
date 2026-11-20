@@ -97,6 +97,7 @@ const SKIP_TITLES = { test: t => !isStudyChapter({ title: t }) || /^(cover|umsch
 export async function processBook(subId, fileId, onStatus = () => {}) {
   let sub = store.subject(subId);
   const role0 = bookRole(sub.books.find(b => b.fileId === fileId) || {});
+  if (role0 === 'faelle' && !sub.books.some(b => bookRole(b) === 'stoff' && b.chapters?.length)) onStatus('Hinweis: Lehrbücher sind noch nicht gegliedert – Zuordnung zu Kapiteln fehlt dann.');
   if (role0 === 'aus') { onStatus('übersprungen (nicht verwenden)'); return; }
   if (role0 === 'nachschlag') {
     // Nachschlagewerk (z. B. Gesetzestext): nur Text einlesen, nicht zusammenfassen – kostet nichts
@@ -128,6 +129,22 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
       });
     }
     book = store.subject(subId).books.find(b => b.fileId === fileId);
+    if (bookRole(book) === 'faelle') {
+      const todoF = book.chapters.filter(c => !c.cases);
+      let j = 0;
+      for (const ch of todoF) {
+        j++;
+        const cur = store.subject(subId).books.find(b => b.fileId === fileId);
+        if (!cur || bookRole(cur) !== 'faelle') { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
+        if (!isStudyChapter(ch)) { patchCases(subId, fileId, ch.id, []); continue; }
+        onStatus(`Löse Fälle heraus (${j} von ${todoF.length}): ${ch.title}`);
+        await extractCases(subId, fileId, ch.id, t.pages);
+      }
+      patchBook(subId, fileId, b => { b.status = 'fertig'; });
+      store.update(s => { const f = s.subjects.find(x => x.id === subId).files[fileId]; if (f) { f.isNew = false; f.changed = false; } });
+      onStatus('Fertig');
+      return;
+    }
     const todo = book.chapters.filter(c => !c.summary);
     let i = 0;
     for (const ch of todo) {
@@ -227,6 +244,31 @@ export async function summarizeChapter(subId, fileId, chId, pagesOpt) {
     c.summary = r; c.status = 'fertig'; c.summarizedAt = Date.now();
   });
   return r;
+}
+
+function patchCases(subId, fileId, chId, cases) {
+  store.update(s => {
+    const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId);
+    const c = b.chapters.find(x => x.id === chId);
+    c.cases = cases; c.status = 'fertig';
+  });
+}
+
+// Fallsammlung: Fälle samt Originallösung herauslösen und auf den Lehrbuchstoff beziehen
+export async function extractCases(subId, fileId, chId, pagesOpt) {
+  const sub = store.subject(subId);
+  const book = sub.books.find(b => b.fileId === fileId);
+  const ch = book.chapters.find(c => c.id === chId);
+  const pages = pagesOpt || (await getFileText(sub, fileId)).pages;
+  const text = pagesToText(pages, ch.startPage, ch.endPage);
+  const r = await completeJson({
+    model: 'smart', maxTokens: 12000,
+    system: 'Du arbeitest eine juristische FALLSAMMLUNG (Übungsfälle mit Lösungen, österreichisches Recht) auf. Gib die Fälle und die Lösungen des Buchs wieder – erfinde keine eigenen Lösungen. Ordne jede rechtliche Aussage aus den Lösungen dem passenden Kapitel der Lehrbücher zu, damit der Lehrbuchstoff anhand der Fälle wiederholt werden kann.',
+    messages: [{ role: 'user', content: `Fallsammlung: „${book.title}“, Abschnitt: „${ch.title}“\n\nJSON:\n{\n "faelle": [{\n   "titel": "kurzer Titel",\n   "sachverhalt": "Sachverhalt möglichst wörtlich",\n   "fragen": ["Fallfragen"],\n   "loesung": "die Lösung des Buchs, gegliedert (Markdown), mit Seitenangaben – vollständig, nur sprachlich gestrafft",\n   "ansprueche": [{"wer": "…", "gegen": "…", "was": "…", "grundlage": "Anspruchsgrundlage mit Norm", "ergebnis": "…"}],\n   "aussagen": [{"aussage": "eine allgemeine Rechtsaussage aus der Lösung, die über den Fall hinaus gilt", "kapitelId": "passendes Lehrbuchkapitel", "ebene": "basis|vertiefung"}],\n   "stolperfallen": ["…"],\n   "kapitelIds": ["Lehrbuchkapitel, deren Stoff der Fall prüft"],\n   "schwierigkeit": "einfach|mittel|schwer"\n }]\n}\nWenn der Abschnitt keine Fälle enthält (z. B. nur Einleitung oder Methodik), gib {"faelle": []} zurück, aber übernimm allgemeine Hinweise zur Falllösungstechnik als Fall mit titel "Hinweise zur Falllösung" nur dann, wenn sie wirklich prüfungsrelevant sind.\n\nLEHRBUCHKAPITEL (ID | Titel):\n${chapterListForPrompt(sub) || '(noch keine)'}\n\nTEXT DER FALLSAMMLUNG:\n${clip(text, 300000)}` }]
+  });
+  const cases = (r.faelle || []).filter(f => f && (f.sachverhalt || f.loesung));
+  patchCases(subId, fileId, chId, cases);
+  return cases;
 }
 
 function chapterListForPrompt(sub, withSummary = false) {

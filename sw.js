@@ -1,5 +1,5 @@
 // Service Worker: App offline startbar machen
-const VERSION = 'lernapp-v7';
+const VERSION = 'lernapp-v8';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/store.js', 'js/drive.js', 'js/ai.js', 'js/extract.js', 'js/ris.js',

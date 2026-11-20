@@ -128,9 +128,16 @@ export function queueProcessing(id) {
   if (!sub) return;
   // Bücher der nächsten Prüfung zuerst, Nachschlagewerke (nur einlesen) zuletzt, „nicht verwenden“ gar nicht
   const next = (sub.exams || []).filter(e => e.status === 'aktiv' && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
-  const rank = b => bookRole(b) === 'nachschlag' ? 2 : bookInExam(b, next) ? 0 : 1;
-  const books = sub.books.filter(b => bookRole(b) !== 'aus' && !['fertig', 'fehler', 'nachschlagbar', 'pausiert'].includes(b.status)).sort((a, b) => rank(a) - rank(b));
-  for (const b of books) runJob('book:' + b.fileId, `${bookRole(b) === 'nachschlag' ? 'Nachschlagewerk' : 'Lehrbuch'} „${b.title}“ ${bookRole(b) === 'nachschlag' ? 'einlesen' : 'verarbeiten'}`, st => processBook(id, b.fileId, st), { subId: id });
+  const rank = b => ({ nachschlag: 3, faelle: 2 }[bookRole(b)] ?? (bookInExam(b, next) ? 0 : 1));
+  const needsWork = b => {
+    const r = bookRole(b);
+    if (r === 'aus' || ['fehler', 'pausiert'].includes(b.status)) return false;
+    if (r === 'nachschlag') return b.status !== 'nachschlagbar';
+    if (!b.chapters?.length) return true;
+    return r === 'faelle' ? b.chapters.some(c => !c.cases) : b.status !== 'fertig';
+  };
+  const books = sub.books.filter(needsWork).sort((a, b) => rank(a) - rank(b));
+  for (const b of books) runJob('book:' + b.fileId, `${{ nachschlag: 'Nachschlagewerk', faelle: 'Fallsammlung' }[bookRole(b)] || 'Lehrbuch'} „${b.title}“ ${bookRole(b) === 'nachschlag' ? 'einlesen' : 'verarbeiten'}`, st => processBook(id, b.fileId, st), { subId: id });
   for (const u of sub.units) if (!u.analysis && u.status !== 'fehler') runJob('unit:' + u.fileId, `Einheit „${u.title}“ analysieren`, st => analyzeUnit(id, u.fileId, st), { subId: id });
   for (const k of sub.altklausuren) if (!k.analysis && k.status !== 'fehler') runJob('alt:' + k.fileId, `Altklausur „${k.title}“ analysieren`, st => analyzeAltklausur(id, k.fileId, st), { subId: id });
   for (const r of sub.rulings) if (r.source === 'upload' && !r.summary && r.status !== 'fehler') runJob('rul:' + r.id, `Urteil „${r.title}“ aufbereiten`, () => summarizeRuling(id, r.id), { subId: id });

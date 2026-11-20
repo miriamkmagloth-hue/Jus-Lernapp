@@ -190,9 +190,18 @@ export function isStudyChapter(c) {
 
 // Rolle eines Buchs: 'stoff' (Lernstoff), 'nachschlag' (nur nachschlagen, z. B. Gesetzestext), 'aus' (nicht verwenden)
 const LOOKUP_TITLE = /gesetz(es)?text|kodex|textausgabe|gesetzessammlung/i;
+const CASES_TITLE = /fall+(ö|oe)sung|fallsammlung|fallbuch|fälle|faelle|casebook|übungsbuch|uebungsbuch|klausurenkurs/i;
 export function bookRole(b) {
   if (b.role) return b.role;
-  return LOOKUP_TITLE.test(b.title || '') ? 'nachschlag' : 'stoff';
+  if (LOOKUP_TITLE.test(b.title || '')) return 'nachschlag';
+  if (CASES_TITLE.test(b.title || '')) return 'faelle';
+  return 'stoff';
+}
+// Alle Fälle aus Fallsammlungen eines Fachs: [{ book, chapter, idx, fall }]
+export function collectionCases(sub) {
+  const out = [];
+  for (const b of sub.books || []) if (bookRole(b) === 'faelle') for (const c of b.chapters || []) (c.cases || []).forEach((f, idx) => out.push({ book: b, chapter: c, idx, fall: f }));
+  return out;
 }
 // Gehört ein Buch zu einer Prüfung? (exam.bookIds = null heißt: alle Lernstoff-Bücher)
 export function bookInExam(b, exam) {
