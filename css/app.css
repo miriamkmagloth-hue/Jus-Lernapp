@@ -201,3 +201,15 @@ body.has-app-bg .chat-input { background: transparent; }
 input[type=range] { width: 100%; accent-color: var(--primary); }
 .color-field { margin-bottom: 12px; } .color-field > span { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
 mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+
+/* Auf Netlify (Gratis-Plan) blendet Netlify unten ein Badge ein: Navigation darüber schieben */
+body.on-netlify .bottomnav { padding-bottom: calc(66px + var(--safe-bottom)); }
+body.on-netlify .app { padding-bottom: calc(160px + var(--safe-bottom)); }
+body.on-netlify .toast { bottom: calc(150px + var(--safe-bottom)); }
+body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
+@media (min-width: 900px) {
+  body.on-netlify .bottomnav { padding-bottom: 0; }
+  body.on-netlify .app { padding-bottom: 96px; }
+  body.on-netlify .chat-input { bottom: 70px; }
+  body.on-netlify .toast { bottom: 90px; }
+}

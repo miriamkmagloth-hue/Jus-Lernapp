@@ -144,6 +144,7 @@ export function queueProcessing(id) {
 }
 
 async function start() {
+  if (location.hostname.endsWith('.netlify.app')) document.body.classList.add('on-netlify');
   await store.load();
   applyTheme();
   let lastDesign = JSON.stringify(store.state.settings.design || {});
