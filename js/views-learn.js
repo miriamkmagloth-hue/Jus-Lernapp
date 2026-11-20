@@ -3,7 +3,7 @@ import { store, uid, allChapters, findChapter } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, ampel } from './ui.js';
 import { setTitle, render } from './app.js';
 import { completeJson, complete, clip } from './ai.js';
-import { chapterText, recordResult, recordLevelResult, combineLevels, addMistake, getFileText } from './processing.js';
+import { chapterText, recordResult, recordLevelResult, combineLevels, addMistake, getFileText, setBaseline } from './processing.js';
 import { mountChat, speak } from './chat.js';
 import { activeExams } from './planner.js';
 
@@ -503,6 +503,7 @@ export function assessmentView(el, subId, examId) {
               const f = k => sc[k][1] ? sc[k][0] / sc[k][1] : null;
               p.levels = { basis: f('basis'), vertiefung: f('vertiefung') };
               p.mastery = combineLevels(p.levels); p.assessed = true; p.assessedAt = Date.now();
+              setBaseline(p);
             }
           });
           b++;

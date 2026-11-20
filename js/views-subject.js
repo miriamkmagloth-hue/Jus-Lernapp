@@ -2,7 +2,7 @@
 import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam, collectionCases } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
-import { computePlan, activeExams, subjectMastery, PRIO_LABEL } from './planner.js';
+import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
 import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
@@ -485,12 +485,14 @@ export function examView(el, subId, examId) {
       <div class="row between small" style="margin-top:4px"><span>✅ um <strong>Fälle sicher zu lösen</strong></span><strong>ca. ${(Math.ceil(plan.hoursFaelle * 2) / 2).toLocaleString('de-AT')} h</strong></div>
       <div class="row between small" style="margin-top:4px"><span>derzeit eingeplant</span><strong>${exam.hoursPerDay} h</strong></div>
       ${Math.ceil(plan.hoursSehrGut * 2) / 2 !== Number(exam.hoursPerDay) ? `<button class="btn secondary small" style="margin-top:8px" data-hours="${Math.max(0.5, Math.ceil(plan.hoursSehrGut * 2) / 2)}">Auf ${(Math.max(0.5, Math.ceil(plan.hoursSehrGut * 2) / 2)).toLocaleString('de-AT')} h pro Lerntag stellen</button>` : ''}
-      <p class="tiny muted" style="margin:6px 0 0">Die Empfehlung sinkt, sobald du Einstufung und Tests machst – die App rechnet dann nur noch mit dem, was dir wirklich fehlt.</p></div>` : ''}
+      <p class="tiny muted" style="margin:6px 0 0">Die Empfehlung sinkt, sobald du Einstufung und Tests machst – die App rechnet dann nur noch mit dem, was dir wirklich fehlt.</p>
+      <p class="small" style="margin:8px 0 0">⏱ ${esc(paceText(plan.pace))}</p></div>` : ''}
     <details style="margin-top:10px"><summary class="small">So rechnet die App</summary><div class="small">
       <p><strong>Verfügbare Zeit:</strong> alle Tage ab heute bis zum Tag vor der Prüfung, nur an deinen Lerntagen (${(exam.studyDays || []).map(d => ['So','Mo','Di','Mi','Do','Fr','Sa'][d]).join(', ')}). Abgezogen werden Feiertage und alle Einträge im <a href="#/kalender">Lernkalender</a>${plan.offDays ? ` – derzeit <strong>${plan.offDays} Tag(e)</strong>: ${plan.offList.slice(0, 8).map(o => `${o.icon} ${fmtDate(o.date)}`).join(', ')}${plan.offList.length > 8 ? ' …' : ''}` : ''}. Das ergibt ${plan.studyDays ?? '–'} Lerntage × ${exam.hoursPerDay} h. Davon bleiben 10 % als Puffer für die Schlusswiederholung.</p>
       <p><strong>Ziel:</strong> Für ein <strong>Sehr gut</strong> soll das Basiswissen zu 90 % sitzen (bei „nur wenn Zeit“-Kapiteln 75 %), das Vertiefungswissen zu 75 % bei „muss sitzen“, 60 % bei „wichtig“ und 30 % bei „nur wenn Zeit“. Für <strong>„Fälle sicher lösen“</strong> reichen Basis 80–85 % und Vertiefung 20–40 % – das ist das Mindestziel, das der Plan absichert, wenn die Zeit knapp ist.</p>
       <p><strong>Nötige Zeit:</strong> pro Kapitel die geschätzte Lernzeit aus der Zusammenfassung (sonst ca. 6 Min. pro Seite), bei schriftlichen Prüfungen +25 % fürs Falltraining. Davon entfallen ca. zwei Drittel auf Basis-, ein Drittel auf Vertiefungswissen. Was du laut Einstufung, Tests und Fällen schon kannst, wird abgezogen.</p>
       <p><strong>Wichtigkeit eines Kapitels:</strong> aus der Stoffeingrenzung (muss sitzen / wichtig / nur wenn Zeit), wie oft es in Altklausuren vorkommt, wie viele Fälle deiner Fallsammlungen es betreffen, ob es in der Lehrveranstaltung betont wurde und ob es ein Prüfungsschema enthält. Ohne Stoffeingrenzung gilt jedes Kapitel als „wichtig“.</p>
+      <p><strong>Persönliches Lerntempo:</strong> Die App misst, wie lange du in den Kapiteln eines Fachs lernst (Zusammenfassung, Tests, Karten, Chat, Falltraining) und wie stark dein Kenntnisstand seit dem Einstufungstest dabei steigt. Brauchst du in diesem Fach weniger Zeit als geschätzt, sinkt der Aufwand für alle restlichen Kapitel – brauchst du mehr, steigt er. Das wird pro Fach getrennt gerechnet und wiegt umso stärker, je mehr Lernzeit gemessen wurde.</p>
       <p><strong>Prüfungsreife:</strong> wie nah du insgesamt am Sehr-gut-Ziel bist, gewichtet nach dem Umfang der Kapitel.</p>
       <p>Noch nicht zusammengefasste Kapitel werden grob nach Seitenzahl geschätzt – die Rechnung wird genauer, sobald alle Lehrbücher verarbeitet sind.</p></div></details>
     <div class="row" style="margin-top:8px"><a class="btn secondary small" href="#/kalender">📅 Lernkalender: freie Tage, Krankheit, Schließtage</a></div></div>

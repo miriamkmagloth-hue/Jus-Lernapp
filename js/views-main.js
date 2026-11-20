@@ -3,7 +3,7 @@ import { store, local, uid, newExam, normalizeSubject, allChapters, syncExam } f
 import { signIn, signOut, isSignedIn, syncOnStart } from './drive.js';
 import { esc, md, toast, pickFolders, confirmDialog, fmtDate, daysUntil, fmtMin, barChart, ampel, openModal, closeModal, busy, errorBox } from './ui.js';
 import { setTitle, render, autoUpdate } from './app.js';
-import { computePlan, activeExams, subjectMastery } from './planner.js';
+import { computePlan, activeExams, subjectMastery, paceFor, paceText } from './planner.js';
 import { CATEGORIES } from './processing.js';
 import { aiReady, completeJson } from './ai.js';
 import { REASONS, cal, addEntry, removeEntry, offReason, holidays, todayIso, iso } from './calendar.js';
@@ -233,6 +233,7 @@ export function statsView(el) {
     html += `<div class="card"><div class="row between"><h3 style="margin:0">${esc(s.name)}</h3><span class="small muted">${fmtMin(mins)} gesamt</span></div>
       <div class="progress green" style="margin:10px 0 4px"><div style="width:${Math.round(m.avg * 100)}%"></div></div>
       <div class="tiny muted">${Math.round(m.avg * 100)} % beherrscht · ${m.assessed} von ${m.total} Kapiteln eingestuft</div>
+      <div class="small" style="margin-top:6px">⏱ ${esc(paceText(paceFor(s)))}</div>
       ${chs.length ? `<h4>Schwächste Kapitel</h4><ul class="list">${chs.slice(0, 5).map(c => `<li><a class="item" href="#/fach/${s.id}/kapitel/${c.id}"><span class="dot ${ampel(c.p.mastery, true)}"></span>${esc(c.title)}<span class="chev">${Math.round(c.p.mastery * 100)} %</span></a></li>`).join('')}</ul>` : ''}
       ${activeExams(s).map(e => { const p = computePlan(s, e); return `<div class="small" style="margin-top:8px"><strong>${esc(e.name)}:</strong> noch ca. ${fmtMin(p.need)} Lernaufwand${isFinite(p.available) ? `, ${fmtMin(p.available)} verfügbar` : ''}</div>`; }).join('')}
     </div>`;

@@ -99,6 +99,21 @@ setInterval(() => {
     let sess = s.progress.sessions.find(x => x.day === day && x.subId === m[1]);
     if (!sess) { sess = { day, subId: m[1], minutes: 0 }; s.progress.sessions.push(sess); }
     sess.minutes += 0.5;
+    // Lernzeit auch dem Kapitel zuordnen (für das persönliche Lerntempo)
+    const k = (location.hash || '').match(/^#\/fach\/[^/]+\/kapitel\/([^/]+)/);
+    if (k) {
+      const pc = s.progress.chapters[k[1]] || (s.progress.chapters[k[1]] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 });
+      pc.minutes = (pc.minutes || 0) + 0.5;
+    }
+    // Falltraining: Zeit auf die Kapitel des aktuellen Falls verteilen
+    const f = (location.hash || '').match(/^#\/fach\/([^/]+)\/fall/);
+    if (f) {
+      try {
+        const c = JSON.parse(sessionStorage.getItem('case:' + f[1]) || 'null');
+        const ids = (c?.kapitelIds || []).filter(id => s.progress.chapters[id] || true);
+        ids.forEach(id => { const pc = s.progress.chapters[id] || (s.progress.chapters[id] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 }); pc.minutes = (pc.minutes || 0) + 0.5 / ids.length; });
+      } catch {}
+    }
     if (s.progress.sessions.length > 2000) s.progress.sessions = s.progress.sessions.slice(-2000);
   }, { silent: true });
 }, 30000);

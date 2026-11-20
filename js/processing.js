@@ -489,7 +489,9 @@ export function recordResult(chapterIds, fraction, kind) {
   store.update(s => {
     for (const id of chapterIds) {
       const p = s.progress.chapters[id] || (s.progress.chapters[id] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 });
+      const wasAssessed = p.assessed;
       p.mastery = p.assessed ? p.mastery * 0.6 + fraction * 0.4 : fraction;
+      if (!wasAssessed) setBaseline(p);
       p.assessed = true;
       p.lastStudied = Date.now();
       p.quizzes.push({ at: Date.now(), score: fraction, kind });
@@ -509,7 +511,9 @@ export function recordLevelResult(chId, levels, kind) {
       const f = v[0] / v[1];
       p.levels[k] = p.levels[k] == null ? f : p.levels[k] * 0.6 + f * 0.4;
     }
+    const wasAssessed = p.assessed;
     p.mastery = combineLevels(p.levels, p.mastery, p.assessed);
+    if (!wasAssessed) setBaseline(p);
     p.assessed = true;
     p.lastStudied = Date.now();
     const tot = (levels.basis?.[1] || 0) + (levels.vertiefung?.[1] || 0);
@@ -530,6 +534,12 @@ export function levelText(p) {
   if (!p?.levels) return '';
   const f = x => x == null ? '–' : Math.round(x * 100) + ' %';
   return `Basis ${f(p.levels.basis)} · Vertiefung ${f(p.levels.vertiefung)}`;
+}
+
+// Ausgangspunkt fürs Lerntempo: Kenntnisstand und bisherige Lernzeit beim ersten Test
+export function setBaseline(p) {
+  p.baseline = p.mastery || 0;
+  p.minAtBaseline = p.minutes || 0;
 }
 
 export function markStudied(chId) {

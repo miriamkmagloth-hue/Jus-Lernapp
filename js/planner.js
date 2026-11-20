@@ -47,14 +47,42 @@ function remainingFor(effort, levels, assessed, mastery, tB, tV) {
   return partB + partV;
 }
 
+// Persönliches Lerntempo in einem Fach: tatsächliche Lernzeit im Verhältnis zur geschätzten Zeit für den erreichten Fortschritt
+export function paceFor(sub) {
+  const prog = store.state.progress.chapters;
+  let act = 0, exp = 0, chs = 0;
+  for (const c of allChapters(sub)) {
+    const p = prog[c.id];
+    if (!p || p.baseline == null) continue;
+    const minutes = Math.max(0, (p.minutes || 0) - (p.minAtBaseline || 0));
+    const gain = Math.max(0, (p.mastery || 0) - p.baseline);
+    if (minutes < 5) continue;
+    const base = c.summary?.lernzeitMinuten > 0 ? c.summary.lernzeitMinuten : (c.pages || 10) * 6;
+    act += minutes; exp += base * gain; chs++;
+  }
+  const MIN_ACT = 90;
+  if (act < MIN_ACT || exp < 20) return { factor: 1, reliable: false, act, exp, chapters: chs, minNeeded: MIN_ACT };
+  const raw = Math.min(2.5, Math.max(0.4, act / exp));
+  const weight = Math.min(1, act / 600); // je mehr Lernzeit gemessen, desto stärker zählt das eigene Tempo
+  return { factor: 1 + (raw - 1) * weight, raw, reliable: true, act, exp, chapters: chs, weight };
+}
+
+export function paceText(pace) {
+  if (!pace.reliable) return `Noch zu wenig Daten – ab ca. ${(Math.round(pace.minNeeded / 60 * 10) / 10).toLocaleString('de-AT')} h Lernzeit nach dem Einstufungstest passt die App die Schätzung an dein Tempo an (bisher ${Math.round(pace.act)} Min).`;
+  const f = pace.factor;
+  const how = f < 0.9 ? `${(1 / f).toLocaleString('de-AT', { maximumFractionDigits: 1 })}× so schnell wie geschätzt` : f > 1.1 ? `du brauchst ca. ${f.toLocaleString('de-AT', { maximumFractionDigits: 1 })}× so lang wie geschätzt` : 'ungefähr so schnell wie geschätzt';
+  return `Dein Lerntempo in diesem Fach: ${how} (gemessen an ${(Math.round(pace.act / 60 * 10) / 10).toLocaleString('de-AT')} h Lernzeit in ${pace.chapters} Kapiteln). Die Restzeit ist entsprechend angepasst.`;
+}
+
 export function computePlan(sub, exam) {
   const prog = store.state.progress.chapters;
+  const pace = paceFor(sub);
   const alt = altFrequency(sub), prof = profFrequency(sub), fs = collectionFrequency(sub);
   const chapters = allChapters(sub, { exam }).map(c => {
     const scope = exam.scopeMap ? (exam.scopeMap[c.id] || 'optional') : 'wichtig';
     const p = prog[c.id] || { mastery: 0, assessed: false };
     const base = c.summary?.lernzeitMinuten > 0 ? c.summary.lernzeitMinuten : (c.pages || 10) * 6;
-    const effort = base * (exam.type === 'schriftlich' ? 1.25 : 1);
+    const effort = base * (exam.type === 'schriftlich' ? 1.25 : 1) * pace.factor;
     const hasSchema = (c.summary?.schemata || []).length > 0;
     const reasons = [];
     if (exam.scopeMap) reasons.push('Eingrenzung: ' + PRIO_LABEL[scope]);
@@ -109,7 +137,7 @@ export function computePlan(sub, exam) {
   else { status = 'eng'; message = `Für ein Sehr gut bräuchtest du ca. ${h(hoursSehrGut)} h, für „Fälle sicher lösen“ ca. ${h(hoursFaelle)} h pro Lerntag (eingeplant: ${exam.hoursPerDay} h). Ich habe priorisiert: Das Wichtigste ist voll eingeplant, der Rest nur, wenn Zeit bleibt.`; }
 
   const todayOff = offReason(todayIso());
-  return { chapters, inScope, need, needFaelle, hoursSehrGut, hoursFaelle, readiness, available: avail.minutes, usable, days: avail.days, studyDays: avail.studyDays, offDays: avail.off, offList: avail.offList || [], ratio, status, message, todayOff, today: todayOff ? [] : todaySuggestions(sorted, exam) };
+  return { pace, chapters, inScope, need, needFaelle, hoursSehrGut, hoursFaelle, readiness, available: avail.minutes, usable, days: avail.days, studyDays: avail.studyDays, offDays: avail.off, offList: avail.offList || [], ratio, status, message, todayOff, today: todayOff ? [] : todaySuggestions(sorted, exam) };
 }
 
 export function todaySuggestions(sorted, exam) {
