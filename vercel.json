@@ -1,0 +1,10 @@
+{
+  "cleanUrls": false,
+  "rewrites": [
+    { "source": "/ris-api/:path*", "destination": "https://data.bka.gv.at/ris/api/:path*" },
+    { "source": "/ris-doc/:path*", "destination": "https://www.ris.bka.gv.at/:path*" }
+  ],
+  "headers": [
+    { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+  ]
+}
