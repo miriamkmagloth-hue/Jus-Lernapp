@@ -37,9 +37,9 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
     el.innerHTML = busy('Erstelle Fragen aus dem Lehrbuch …');
     try {
       let material = '';
-      for (const id of chapterIds.slice(0, 4)) material += `\n\n# Kapitel ${findChapter(sub, id)?.chapter.title} [ID ${id}]\n` + clip(await chapterText(sub, id), chapterIds.length > 1 ? 80000 : 250000);
+      for (const id of chapterIds.slice(0, 4)) { const fc = findChapter(sub, id); material += `\n\n# Kapitel ${fc?.chapter.title} [ID ${id}]\n` + (fc?.chapter.summary ? summaryDigest({ ...fc.chapter, id }) + '\n\nAUSZUG AUS DEM LEHRBUCHTEXT:\n' : '') + clip(await chapterText(sub, id), chapterIds.length > 1 ? 25000 : 60000); }
       const r = await completeJson({
-        model: 'smart', maxTokens: 8000,
+        model: 'smart', maxTokens: 6000, purpose: 'Multiple Choice',
         system: 'Du erstellst Multiple-Choice-Prüfungsfragen ausschließlich aus dem gegebenen Lehrbuchtext.',
         messages: [{ role: 'user', content: `Erstelle ${count} Multiple-Choice-Fragen: ${LEVEL_PROMPT[level] || LEVEL_PROMPT.gemischt}. Kennzeichne jede Frage mit "ebene". Je 4 Antwortoptionen, genau eine richtig. Falsche Optionen sollen plausibel sein (typische Verwechslungen). Mische Wissens-, Verständnis- und Anwendungsfragen (Mini-Fälle).\nJSON: {"fragen":[{"frage":"…","optionen":["…","…","…","…"],"richtig":Index 0-3,"erklaerung":"warum richtig, warum die anderen falsch","seite":"S. …","kapitelId":"…","ebene":"basis|vertiefung"}]}\n\nLEHRBUCHTEXT:${material}` }]
       });
@@ -94,9 +94,9 @@ export function mountFreeQuestion(el, sub, ch) {
     try {
       const text = await chapterText(sub, ch.id);
       const q = await completeJson({
-        model: 'smart', maxTokens: 2500,
+        model: 'smart', maxTokens: 2500, purpose: 'Freie Frage',
         system: 'Du bist Prüferin und stellst offene Fragen ausschließlich zum gegebenen Lehrbuchtext.',
-        messages: [{ role: 'user', content: `Stelle EINE offene Prüfungsfrage zu diesem Kapitel (wie in einer mündlichen Prüfung oder als Kurzfrage in einer Klausur), Ebene: ${level === 'basis' ? 'Basiswissen' : level === 'vertiefung' ? 'Vertiefung / Spezialwissen' : 'meist Basis, gelegentlich Vertiefung'}. Variiere: Definition, Abgrenzung, Voraussetzungen, Rechtsfolgen, Mini-Fall.\nBereits gestellt (nicht wiederholen): ${(ch._asked || []).join(' | ') || '–'}\nJSON: {"frage":"…","ebene":"basis|vertiefung","musterantwort":"Markdown, mit Seitenangaben","kernpunkte":["was eine gute Antwort enthalten muss"]}\n\nKAPITELTEXT:\n${clip(text, 250000)}` }]
+        messages: [{ role: 'user', content: `Stelle EINE offene Prüfungsfrage zu diesem Kapitel (wie in einer mündlichen Prüfung oder als Kurzfrage in einer Klausur), Ebene: ${level === 'basis' ? 'Basiswissen' : level === 'vertiefung' ? 'Vertiefung / Spezialwissen' : 'meist Basis, gelegentlich Vertiefung'}. Variiere: Definition, Abgrenzung, Voraussetzungen, Rechtsfolgen, Mini-Fall.\nBereits gestellt (nicht wiederholen): ${(ch._asked || []).join(' | ') || '–'}\nJSON: {"frage":"…","ebene":"basis|vertiefung","musterantwort":"Markdown, mit Seitenangaben","kernpunkte":["was eine gute Antwort enthalten muss"]}\n\nKAPITELTEXT:\n${clip(text, 60000)}` }]
       });
       ch._asked = [...(ch._asked || []), q.frage].slice(-10);
       el.innerHTML = `<div class="card"><div style="margin-bottom:6px">${lvlPill(q)}</div><div class="item-title" style="font-size:1.05rem">${enrich(esc(q.frage))}</div>
@@ -111,7 +111,7 @@ export function mountFreeQuestion(el, sub, ch) {
         res.innerHTML = busy('Bewerte …');
         try {
           const g = await completeJson({
-            model: 'smart', maxTokens: 2500,
+            model: 'fast', maxTokens: 2000, purpose: 'Antwort bewerten',
             system: 'Du bewertest eine Prüfungsantwort fair, aber genau, ausschließlich anhand der Musterantwort und Kernpunkte aus dem Lehrbuch.',
             messages: [{ role: 'user', content: `FRAGE: ${q.frage}\nMUSTERANTWORT: ${q.musterantwort}\nKERNPUNKTE: ${(q.kernpunkte || []).join(' | ')}\nANTWORT DER STUDENTIN: ${ans}\n\nJSON: {"punkte": 0-10, "richtig": ["was gut war"], "fehlt": ["was gefehlt hat oder falsch war"], "feedback": "kurzes Feedback in Markdown"}` }]
           });
@@ -166,9 +166,9 @@ export function mountChapterCards(el, sub, ch) {
       try {
         const text = await chapterText(sub, ch.id);
         const r = await completeJson({
-          model: 'smart', maxTokens: 6000,
+          model: 'smart', maxTokens: 6000, purpose: 'Karteikarten',
           system: 'Du erstellst Lernkarteikarten ausschließlich aus dem gegebenen Lehrbuchtext.',
-          messages: [{ role: 'user', content: `Erstelle 15–25 Karteikarten zu den prüfungsrelevanten Inhalten (Definitionen, Voraussetzungen, Rechtsfolgen, Abgrenzungen, Normen). Vorderseite: präzise Frage. Rückseite: knappe, vollständige Antwort mit Seitenangabe.\nBereits vorhanden (nicht doppeln): ${cards.map(c => c.front).join(' | ').slice(0, 4000) || '–'}\nKennzeichne jede Karte mit "ebene" (basis oder vertiefung).\nJSON: {"karten":[{"vorne":"…","hinten":"…","ebene":"basis|vertiefung"}]}\n\nKAPITELTEXT:\n${clip(text, 250000)}` }]
+          messages: [{ role: 'user', content: `Erstelle 15–25 Karteikarten zu den prüfungsrelevanten Inhalten (Definitionen, Voraussetzungen, Rechtsfolgen, Abgrenzungen, Normen). Vorderseite: präzise Frage. Rückseite: knappe, vollständige Antwort mit Seitenangabe.\nBereits vorhanden (nicht doppeln): ${cards.map(c => c.front).join(' | ').slice(0, 4000) || '–'}\nKennzeichne jede Karte mit "ebene" (basis oder vertiefung).\nJSON: {"karten":[{"vorne":"…","hinten":"…","ebene":"basis|vertiefung"}]}\n\nKAPITELTEXT:\n${clip(text, 80000)}` }]
         });
         store.update(st => { st.cards[ch.id] = [...(st.cards[ch.id] || []), ...(r.karten || []).map(k => ({ id: uid('c_'), front: k.vorne, back: k.hinten, ebene: lvlOf(k) }))]; });
         el.removeAttribute('data-no-rerender');
@@ -278,9 +278,9 @@ export function caseView(el, subId, preset) {
     el.innerHTML = busy('Erstelle einen Fall aus deinen Lehrbüchern … (ca. 1 Minute)');
     try {
       let material = '';
-      for (const id of cfg.ids.slice(0, 4)) material += `\n\n# Kapitel „${findChapter(sub, id).chapter.title}“ [ID ${id}]\n` + clip(await chapterText(sub, id), 90000);
+      for (const id of cfg.ids.slice(0, 3)) material += `\n\n# Kapitel „${findChapter(sub, id).chapter.title}“ [ID ${id}]\n` + clip(await chapterText(sub, id), 40000);
       const r = await completeJson({
-        model: 'smart', maxTokens: 8000,
+        model: 'smart', maxTokens: 6000, purpose: 'Fall erstellen',
         system: 'Du erstellst juristische Übungsfälle nach österreichischem Recht im Stil österreichischer Uni-Klausuren. Der Fall darf nur Probleme enthalten, die mit dem gegebenen Lehrbuchstoff lösbar sind. Die Lösung muss sich auf diesen Stoff stützen (mit Seitenangaben).',
         messages: [{ role: 'user', content: `Erstelle einen Fall (Schwierigkeit: ${cfg.level}) zu den folgenden Stoffgebieten. Typische Fallfrage: „Welche Ansprüche hat A gegen B?“ o. ä. Baue 1–3 typische Stolperfallen ein.\nJSON: {\n "titel": "kurzer Titel",\n "sachverhalt": "der Sachverhalt (Personen mit Buchstaben/Namen, realistisch, präzise)",\n "fallfrage": "…",\n "kapitelIds": ["…"],\n "loesung": {\n   "ansprueche": [{"wer": "…", "gegen": "…", "was": "…", "grundlage": "Anspruchsgrundlage mit Norm", "ergebnis": "besteht / besteht nicht / teilweise, kurz warum"}],\n   "skizze": "vollständige Lösungsskizze im Gutachtenstil (Markdown) mit Seitenangaben",\n   "stolperfallen": ["…"]\n }\n}\n\nSTOFF:${material}` }]
       });
@@ -357,7 +357,7 @@ export function caseView(el, subId, preset) {
         e.target.closest('[data-a]').disabled = true;
         try {
           const g = await completeJson({
-            model: 'smart', maxTokens: 5000,
+            model: 'smart', maxTokens: 4000, purpose: 'Fall korrigieren',
             system: 'Du korrigierst eine Falllösung nach österreichischem Recht wie eine faire, genaue Korrektorin an der Uni. Maßstab ist die Musterlösung (gestützt auf das Lehrbuch). Vertretbare andere Lösungswege anerkennen.',
             messages: [{ role: 'user', content: `SACHVERHALT:\n${c.sachverhalt}\nFALLFRAGE: ${c.fallfrage}\n\nMUSTERLÖSUNG:\nAnsprüche: ${JSON.stringify(c.loesung?.ansprueche || [])}\n${c.loesung?.skizze || ''}\nStolperfallen: ${(c.loesung?.stolperfallen || []).join(' | ')}\n\n${ans ? 'ANSPRÜCHE DER STUDENTIN (nur Anspruchsgrundlagen, keine Prüfung):' : 'LÖSUNG DER STUDENTIN:'}\n${userAns}\n\nJSON: {\n "punkte": 0-100,\n "gefunden": ["richtig erkannt"],\n "fehlend": ["übersehen"],\n "ueberfluessig": ["unnötig/falsch geprüft"],\n ${ans ? '"reihenfolge": "Kommentar zur Prüfungsreihenfolge",' : '"aufbau": "Kommentar zu Aufbau, Gutachtenstil, Subsumtion",'}\n "feedback": "Gesamtfeedback in Markdown",\n "tipps": ["konkrete Verbesserung"]\n}` }]
           });
@@ -413,7 +413,7 @@ export function oralView(el, subId, examId) {
     for (const f of Object.values(sub.files).filter(f => f.category === 'protocols').slice(0, 8)) {
       try { protocols += `\n--- ${f.name} ---\n` + (await getFileText(sub, f.id)).text.slice(0, 15000); } catch {}
     }
-    const material = clip(pool.map(summaryDigest).join('\n\n'), 160000);
+    const material = clip(pool.map(summaryDigest).join('\n\n'), 80000);
     const system = `Du bist Prüferin bei einer mündlichen Prüfung im Fach ${sub.name} an einer österreichischen Universität. Stil: ${style}. Dauer: ca. ${dur} Minuten, also etwa ${Math.round(dur / 2)} Fragen.\nREGELN:\n- Stelle immer nur EINE Frage und warte auf die Antwort.\n- Hake nach, wenn die Antwort unvollständig oder ungenau ist ("Und was gilt, wenn …?", "Woraus ergibt sich das?").\n- Wechsle zwischen Themen, mische Definitionen, Abgrenzungen, kleine Fälle.\n- Erkläre während der Prüfung NICHT ausführlich, gib höchstens kurze Hinweise wie eine echte Prüferin.\n- Frage nur Stoff aus dem Material unten.${protocols ? '\n- Orientiere dich an den Prüferprotokollen: Was dort oft gefragt wird, fragst du bevorzugt.' : ''}\n- Wenn die Zeit um ist, sag "Danke, das war's." und nichts weiter.\n\nPRÜFUNGSSTOFF (Zusammenfassungen der Lehrbuchkapitel):\n${material}${protocols ? '\n\nPRÜFERPROTOKOLLE:\n' + protocols : ''}`;
     const history = [{ role: 'user', content: 'Guten Tag, ich bin bereit. Bitte beginnen Sie mit der Prüfung.', hidden: true }];
     const started = Date.now();
@@ -421,7 +421,7 @@ export function oralView(el, subId, examId) {
     const chat = mountChat(el.querySelector('#chat'), { history, system, speak: true, placeholder: 'Deine Antwort …', emptyText: '' });
     // erste Frage holen
     try {
-      const first = await complete({ system, messages: [{ role: 'user', content: history[0].content }], model: 'smart', maxTokens: 800 });
+      const first = await complete({ system, messages: [{ role: 'user', content: history[0].content }], model: 'smart', maxTokens: 800, purpose: 'Mündliche Simulation' });
       history.push({ role: 'assistant', content: first }); chat.render();
       if (store.state.settings.speakQuestions) speak(first);
     } catch (e) { toast(e.message, 6000); }
@@ -432,7 +432,7 @@ export function oralView(el, subId, examId) {
       el.innerHTML = busy('Bewerte die Prüfung …');
       try {
         const g = await completeJson({
-          model: 'smart', maxTokens: 4000,
+          model: 'smart', maxTokens: 3000, purpose: 'Mündliche Simulation',
           system: 'Du bewertest eine mündliche Prüfung nach österreichischem Notensystem (1 = Sehr gut bis 5 = Nicht genügend), fair und konkret.',
           messages: [{ role: 'user', content: `KAPITEL (ID | Titel):\n${pool.map(c => c.id + ' | ' + c.title).join('\n')}\n\nPRÜFUNGSPROTOKOLL:\n${transcript}\n\nJSON: {"note": 1-5, "zusammenfassung": "ein Satz", "staerken": ["…"], "schwaechen": ["…"], "themen": [{"kapitelId": "…", "bewertung": 0.0-1.0}], "fachsprache": "Kommentar zu Ausdruck und Struktur", "tipps": ["…"]}` }]
         });
@@ -475,10 +475,10 @@ async function makeQuestions(sub, chapters, per) {
   for (const c of chapters) {
     let t = '';
     try { t = await chapterText(sub, c.id); } catch {}
-    material += `\n\n# KAPITEL [ID ${c.id}] „${c.title}“\n` + (t ? clip(t, Math.floor(120000 / chapters.length)) : summaryDigest(c));
+    material += `\n\n# KAPITEL [ID ${c.id}] „${c.title}“\n` + summaryDigest(c) + (t ? '\n\nAUSZUG AUS DEM LEHRBUCHTEXT:\n' + clip(t, 25000) : '');
   }
   const text = await complete({
-    model: 'smart', maxTokens: 16000, json: true,
+    model: 'smart', maxTokens: 12000, json: true, purpose: 'Einstufungstest',
     system: 'Du erstellst präzise Diagnosefragen, um den Kenntnisstand pro Kapitel zuverlässig einzuschätzen. Grundlage ist ausschließlich der Lehrbuchtext. Antworte AUSSCHLIESSLICH mit gültigem JSON im vorgegebenen Format, ohne Text davor oder danach.',
     messages: [{ role: 'user', content: `Erstelle für JEDES Kapitel unten Multiple-Choice-Fragen mit je 4 Optionen: ${per.basis} Fragen zum BASISWISSEN (davon mind. eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und ${per.vert} Frage(n) zur VERTIEFUNG.\n${PRECISION}\nHalte die Erklärungen kurz (max. 2 Sätze).\nGib eine FLACHE Liste zurück, genau in diesem Format (Optionen als reine Texte, "richtig" = Index 0–3 der richtigen Option):\n{"fragen":[{"kapitelId":"k_…","frage":"…","optionen":["…","…","…","…"],"richtig":0,"erklaerung":"…","seite":"S. …","ebene":"basis"}]}\n${material}` }]
   });

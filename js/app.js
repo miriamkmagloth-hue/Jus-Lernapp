@@ -5,7 +5,7 @@ import { signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, c
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
 import { applyTheme } from './theme.js';
-import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings, shareAllTexts, detectBookTitle } from './processing.js';
+import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings, shareAllTexts, detectBookTitle, pollBatches } from './processing.js';
 import * as main from './views-main.js';
 import * as subj from './views-subject.js';
 import * as learn from './views-learn.js';
@@ -153,12 +153,17 @@ export function queueProcessing(id) {
   // Bücher der nächsten Prüfung zuerst, Nachschlagewerke (nur einlesen) zuletzt, „nicht verwenden“ gar nicht
   const next = (sub.exams || []).filter(e => e.status === 'aktiv' && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
   const rank = b => ({ nachschlag: 3, faelle: 2 }[bookRole(b)] ?? (bookInExam(b, next) ? 0 : 1));
+  // Vorbereiten (Text, Kapitel, Kostenvoranschlag) läuft automatisch und kostet so gut wie nichts.
+  // Zusammenfassen erst nach Freigabe (b.approved) – nie automatisch.
   const needsWork = b => {
     const r = bookRole(b);
-    if (r === 'aus' || ['fehler', 'pausiert'].includes(b.status)) return false;
+    if (r === 'aus' || ['fehler', 'pausiert', 'hintergrund'].includes(b.status) || b.batch) return false;
     if (r === 'nachschlag') return b.status !== 'nachschlagbar';
+    if (b.approved) return true;
     if (!b.chapters?.length) return true;
-    return r === 'faelle' ? b.chapters.some(c => !c.cases) : b.status !== 'fertig';
+    if (b.status === 'bereit' && b.estimate) return false;
+    const open = b.chapters.some(c => r === 'faelle' ? !c.cases : !c.summary);
+    return open && !b.estimate;
   };
   const books = sub.books.filter(needsWork).sort((a, b) => rank(a) - rank(b));
   // Bücher, die schon verarbeitet sind: echten Titel nachträglich erkennen
@@ -182,6 +187,10 @@ async function start() {
       try { await syncOnStart(); softRender(); autoUpdate(); } catch (e) { console.warn(e); }
     }
   }
+  // Hintergrund-Aufträge (Lehrbücher) abholen – auch wenn die App zwischendurch zu war
+  const poll = () => pollBatches((b, ok, failed) => { toast(`„${b.title}“: ${ok} Kapitel fertig${failed ? `, ${failed} fehlgeschlagen` : ''}`, 6000); softRender(); }).catch(e => console.warn(e));
+  setTimeout(poll, 3000);
+  setInterval(() => { if (document.visibilityState === 'visible') poll(); }, 3 * 60 * 1000);
   // alle 30 Minuten nach neuen Dateien schauen, solange die App offen ist
   setInterval(() => { if (document.visibilityState === 'visible') autoUpdate(); }, 30 * 60 * 1000);
 }

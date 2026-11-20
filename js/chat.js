@@ -42,7 +42,7 @@ export function mountChat(el, opts) {
     try {
       const system = typeof opts.system === 'function' ? await opts.system() : opts.system;
       const msgsForApi = history.map(m => ({ role: m.role, content: m.content }));
-      const answer = await complete({ system, messages: msgsForApi, model: opts.model || 'smart', maxTokens: opts.maxTokens || 3000 });
+      const answer = await complete({ system, messages: msgsForApi, model: opts.model || 'smart', maxTokens: opts.maxTokens || 3000, purpose: opts.purpose || 'Chat' });
       history.push({ role: 'assistant', content: answer });
       opts.onSave && opts.onSave(history);
       render();

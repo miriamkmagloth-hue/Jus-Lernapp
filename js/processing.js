@@ -2,7 +2,8 @@
 import { store, uid, textGet, textSet, allChapters, findChapter, isStudyChapter, bookRole } from './store.js';
 import { listRecursive, downloadFile, getFileMeta, readAppFile, writeAppFile, isSignedIn } from './drive.js';
 import { fileToText, isSupported, pagesToText } from './extract.js';
-import { completeJson, clip } from './ai.js';
+import { completeJson, clip, batchAvailable, submitBatch, batchStatus, batchResults, parseJson } from './ai.js';
+import { estimate } from './costs.js';
 import { searchJustiz, fetchDocText, toRisNorm, extractCitations } from './ris.js';
 
 export const CATEGORIES = {
@@ -168,33 +169,48 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
       });
     }
     book = store.subject(subId).books.find(b => b.fileId === fileId);
-    if (bookRole(book) === 'faelle') {
-      const todoF = book.chapters.filter(c => !c.cases);
-      let j = 0;
-      for (const ch of todoF) {
-        j++;
-        const cur = store.subject(subId).books.find(b => b.fileId === fileId);
-        if (!cur || bookRole(cur) !== 'faelle') { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
-        if (!isStudyChapter(ch)) { patchCases(subId, fileId, ch.id, []); continue; }
-        onStatus(`Löse Fälle heraus (${j} von ${todoF.length}): ${ch.title}`);
-        await extractCases(subId, fileId, ch.id, t.pages);
-      }
-      patchBook(subId, fileId, b => { b.status = 'fertig'; });
+    const role = bookRole(book);
+    const todo = book.chapters.filter(c => role === 'faelle' ? !c.cases : !c.summary);
+    // Kapitel, die kein Lernstoff sind, gleich als erledigt markieren (kostet nichts)
+    for (const ch of todo.filter(c => !isStudyChapter(c))) role === 'faelle' ? patchCases(subId, fileId, ch.id, []) : patchSummary(subId, fileId, ch.id, { pruefungsrelevant: false, kurzfassung: '' });
+    const work = todo.filter(c => isStudyChapter(c));
+    if (!work.length) {
+      patchBook(subId, fileId, b => { b.status = 'fertig'; b.estimate = null; b.approved = false; });
       store.update(s => { const f = s.subjects.find(x => x.id === subId).files[fileId]; if (f) { f.isNew = false; f.changed = false; } });
       onStatus('Fertig');
       return;
     }
-    const todo = book.chapters.filter(c => !c.summary);
+    // Kostenvoranschlag – ohne Freigabe wird nichts an die KI geschickt
+    const useBatch = batchAvailable();
+    const est = estimateWork(book, work, t.pages, useBatch);
+    if (!book.approved) {
+      patchBook(subId, fileId, b => { b.status = 'bereit'; b.estimate = est; });
+      onStatus(`Bereit – Zusammenfassen kostet ca. ${est.usd.toFixed(2)} $. Bitte im Reiter „Lehrbuch“ freigeben.`);
+      return;
+    }
+    if (useBatch) {
+      onStatus('Schicke die Kapitel an den Hintergrund-Modus …');
+      const reqs = work.map(ch => {
+        const text = pagesToText(t.pages, ch.startPage, ch.endPage);
+        const pr = role === 'faelle' ? casesPrompt(store.subject(subId), book, ch, text) : summaryPrompt(book, ch, text);
+        return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens };
+      });
+      const { id, model } = await submitBatch(reqs);
+      patchBook(subId, fileId, b => { b.status = 'hintergrund'; b.batch = { id, model, kind: role === 'faelle' ? 'faelle' : 'summary', at: Date.now(), n: reqs.length }; b.approved = false; });
+      onStatus('Läuft im Hintergrund – du kannst die App schließen.');
+      return;
+    }
+    // ohne Hintergrund-Modus: Kapitel für Kapitel (freigegeben, daher ohne Limit-Rückfrage)
     let i = 0;
-    for (const ch of todo) {
+    for (const ch of work) {
       i++;
       const cur = store.subject(subId).books.find(b => b.fileId === fileId);
-      if (!cur || bookRole(cur) !== 'stoff') { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
-      if (!isStudyChapter(ch)) continue;
-      onStatus(`Fasse Kapitel ${i} von ${todo.length} zusammen: ${ch.title}`);
-      await summarizeChapter(subId, fileId, ch.id, t.pages);
+      if (!cur || bookRole(cur) !== role) { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
+      onStatus(`${role === 'faelle' ? 'Löse Fälle heraus' : 'Fasse zusammen'} (${i} von ${work.length}): ${ch.title}`);
+      if (role === 'faelle') await extractCases(subId, fileId, ch.id, t.pages, { budgetExempt: true });
+      else await summarizeChapter(subId, fileId, ch.id, t.pages, { budgetExempt: true });
     }
-    patchBook(subId, fileId, b => { b.status = 'fertig'; });
+    patchBook(subId, fileId, b => { b.status = 'fertig'; b.estimate = null; b.approved = false; });
     store.update(s => { const f = s.subjects.find(x => x.id === subId).files[fileId]; if (f) { f.isNew = false; f.changed = false; } });
     onStatus('Fertig');
   } catch (e) {
@@ -239,7 +255,7 @@ export async function detectChapters(pages, outline) {
 async function detectChaptersAI(pages) {
   const head = pages.slice(0, 35).map(p => `[PDF-Seite ${p.n} | Seitenzahl ${p.label}]\n${p.text}`).join('\n\n');
   const r = await completeJson({
-    model: 'fast', maxTokens: 6000,
+    model: 'fast', maxTokens: 6000, purpose: 'Kapitel erkennen',
     system: 'Du analysierst das Inhaltsverzeichnis eines juristischen Lehrbuchs.',
     messages: [{ role: 'user', content: `Hier sind die ersten Seiten eines Lehrbuchs. Finde das Inhaltsverzeichnis und gib die Hauptkapitel (sinnvolle Lerneinheiten, typischerweise 8–40 Stück; zu große Teile in ihre Abschnitte zerlegen) zurück.\nFormat: {"kapitel":[{"titel":"…","seite":"gedruckte Seitenzahl laut Inhaltsverzeichnis"}]}\nLass Vorwort, Verzeichnisse und Register weg.\n\n${clip(head, 90000)}` }]
   });
@@ -266,23 +282,76 @@ async function detectChaptersAI(pages) {
   }).filter(c => c.page);
 }
 
-export async function summarizeChapter(subId, fileId, chId, pagesOpt) {
+function summaryPrompt(book, ch, text) {
+  return {
+    maxTokens: 9000,
+    system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du.`,
+    prompt: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y", "ebene": "basis|vertiefung"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}`
+  };
+}
+
+function patchSummary(subId, fileId, chId, r) {
+  store.update(s => {
+    const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId);
+    const c = b.chapters.find(x => x.id === chId);
+    if (c) { c.summary = r; c.status = 'fertig'; c.summarizedAt = Date.now(); }
+  });
+}
+
+export async function summarizeChapter(subId, fileId, chId, pagesOpt, { budgetExempt = false } = {}) {
   const sub = store.subject(subId);
   const book = sub.books.find(b => b.fileId === fileId);
   const ch = book.chapters.find(c => c.id === chId);
   const pages = pagesOpt || (await getFileText(sub, fileId)).pages;
-  const text = pagesToText(pages, ch.startPage, ch.endPage);
-  const r = await completeJson({
-    model: 'smart', maxTokens: 9000,
-    system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du.`,
-    messages: [{ role: 'user', content: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y", "ebene": "basis|vertiefung"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}` }]
-  });
-  store.update(s => {
-    const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId);
-    const c = b.chapters.find(x => x.id === chId);
-    c.summary = r; c.status = 'fertig'; c.summarizedAt = Date.now();
-  });
+  const pr = summaryPrompt(book, ch, pagesToText(pages, ch.startPage, ch.endPage));
+  const r = await completeJson({ model: 'smart', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Lehrbuch zusammenfassen', budgetExempt });
+  patchSummary(subId, fileId, chId, r);
   return r;
+}
+
+// Kostenvoranschlag für die noch offenen Kapitel eines Buchs
+export function estimateWork(book, chapters, pages, batch) {
+  const model = store.state.settings.models?.anthropic?.smart || 'sonnet';
+  let usdSum = 0, chars = 0;
+  const outPer = bookRole(book) === 'faelle' ? 6000 : 3500;
+  for (const ch of chapters) {
+    const c = pagesToText(pages, ch.startPage, ch.endPage).length;
+    chars += c;
+    usdSum += estimate(model, Math.min(c, 320000) + 9000, outPer, { batch });
+  }
+  return { usd: Math.round(usdSum * 100) / 100, chapters: chapters.length, chars, batch, at: Date.now() };
+}
+
+// Hintergrund-Aufträge abholen (beim Start und regelmäßig)
+export async function pollBatches(onDone = () => {}) {
+  for (const sub of store.state.subjects) {
+    for (const b of sub.books) {
+      if (!b.batch?.id) continue;
+      let st;
+      try { st = await batchStatus(b.batch.id); } catch (e) { console.warn(e); continue; }
+      const counts = st.request_counts || {};
+      store.update(s => { const x = s.subjects.find(y => y.id === sub.id).books.find(y => y.fileId === b.fileId); if (x?.batch) x.batch.progress = counts; }, { silent: true });
+      if (st.processing_status !== 'ended') continue;
+      let results;
+      try { results = await batchResults(b.batch.id, b.batch.model); } catch (e) { console.warn(e); continue; }
+      let ok = 0, failed = 0;
+      for (const r of results) {
+        if (!r.ok) { failed++; continue; }
+        let j; try { j = parseJson(r.text); } catch { failed++; continue; }
+        if (b.batch.kind === 'faelle') patchCases(sub.id, b.fileId, r.id, (j.faelle || []).filter(f => f && (f.sachverhalt || f.loesung)));
+        else patchSummary(sub.id, b.fileId, r.id, j);
+        ok++;
+      }
+      store.update(s => {
+        const x = s.subjects.find(y => y.id === sub.id).books.find(y => y.fileId === b.fileId);
+        const left = x.chapters.filter(c => isStudyChapter(c) && (b.batch.kind === 'faelle' ? !c.cases : !c.summary)).length;
+        x.batch = null; x.estimate = null;
+        x.status = left ? 'bereit' : 'fertig';
+        if (left) x.error = `${left} Kapitel konnten nicht verarbeitet werden – du kannst sie erneut freigeben.`;
+      });
+      onDone(b, ok, failed);
+    }
+  }
 }
 
 function patchCases(subId, fileId, chId, cases) {
@@ -294,17 +363,22 @@ function patchCases(subId, fileId, chId, cases) {
 }
 
 // Fallsammlung: Fälle samt Originallösung herauslösen und auf den Lehrbuchstoff beziehen
-export async function extractCases(subId, fileId, chId, pagesOpt) {
+function casesPrompt(sub, book, ch, text) {
+  return {
+    maxTokens: 12000,
+    system: 'Du arbeitest eine juristische FALLSAMMLUNG (Übungsfälle mit Lösungen, österreichisches Recht) auf. Gib die Fälle und die Lösungen des Buchs wieder – erfinde keine eigenen Lösungen. Ordne jede rechtliche Aussage aus den Lösungen dem passenden Kapitel der Lehrbücher zu, damit der Lehrbuchstoff anhand der Fälle wiederholt werden kann.',
+    prompt: `Fallsammlung: „${book.title}“, Abschnitt: „${ch.title}“\n\nJSON:\n{\n "faelle": [{\n   "titel": "kurzer Titel",\n   "sachverhalt": "Sachverhalt möglichst wörtlich",\n   "fragen": ["Fallfragen"],\n   "loesung": "die Lösung des Buchs, gegliedert (Markdown), mit Seitenangaben – vollständig, nur sprachlich gestrafft",\n   "ansprueche": [{"wer": "…", "gegen": "…", "was": "…", "grundlage": "Anspruchsgrundlage mit Norm", "ergebnis": "…"}],\n   "aussagen": [{"aussage": "eine allgemeine Rechtsaussage aus der Lösung, die über den Fall hinaus gilt", "kapitelId": "passendes Lehrbuchkapitel", "ebene": "basis|vertiefung"}],\n   "stolperfallen": ["…"],\n   "kapitelIds": ["Lehrbuchkapitel, deren Stoff der Fall prüft"],\n   "schwierigkeit": "einfach|mittel|schwer"\n }]\n}\nWenn der Abschnitt keine Fälle enthält (z. B. nur Einleitung oder Methodik), gib {"faelle": []} zurück.\n\nLEHRBUCHKAPITEL (ID | Titel):\n${chapterListForPrompt(sub) || '(noch keine)'}\n\nTEXT DER FALLSAMMLUNG:\n${clip(text, 300000)}`
+  };
+}
+
+// Fallsammlung: Fälle samt Originallösung herauslösen und auf den Lehrbuchstoff beziehen
+export async function extractCases(subId, fileId, chId, pagesOpt, { budgetExempt = false } = {}) {
   const sub = store.subject(subId);
   const book = sub.books.find(b => b.fileId === fileId);
   const ch = book.chapters.find(c => c.id === chId);
   const pages = pagesOpt || (await getFileText(sub, fileId)).pages;
-  const text = pagesToText(pages, ch.startPage, ch.endPage);
-  const r = await completeJson({
-    model: 'smart', maxTokens: 12000,
-    system: 'Du arbeitest eine juristische FALLSAMMLUNG (Übungsfälle mit Lösungen, österreichisches Recht) auf. Gib die Fälle und die Lösungen des Buchs wieder – erfinde keine eigenen Lösungen. Ordne jede rechtliche Aussage aus den Lösungen dem passenden Kapitel der Lehrbücher zu, damit der Lehrbuchstoff anhand der Fälle wiederholt werden kann.',
-    messages: [{ role: 'user', content: `Fallsammlung: „${book.title}“, Abschnitt: „${ch.title}“\n\nJSON:\n{\n "faelle": [{\n   "titel": "kurzer Titel",\n   "sachverhalt": "Sachverhalt möglichst wörtlich",\n   "fragen": ["Fallfragen"],\n   "loesung": "die Lösung des Buchs, gegliedert (Markdown), mit Seitenangaben – vollständig, nur sprachlich gestrafft",\n   "ansprueche": [{"wer": "…", "gegen": "…", "was": "…", "grundlage": "Anspruchsgrundlage mit Norm", "ergebnis": "…"}],\n   "aussagen": [{"aussage": "eine allgemeine Rechtsaussage aus der Lösung, die über den Fall hinaus gilt", "kapitelId": "passendes Lehrbuchkapitel", "ebene": "basis|vertiefung"}],\n   "stolperfallen": ["…"],\n   "kapitelIds": ["Lehrbuchkapitel, deren Stoff der Fall prüft"],\n   "schwierigkeit": "einfach|mittel|schwer"\n }]\n}\nWenn der Abschnitt keine Fälle enthält (z. B. nur Einleitung oder Methodik), gib {"faelle": []} zurück, aber übernimm allgemeine Hinweise zur Falllösungstechnik als Fall mit titel "Hinweise zur Falllösung" nur dann, wenn sie wirklich prüfungsrelevant sind.\n\nLEHRBUCHKAPITEL (ID | Titel):\n${chapterListForPrompt(sub) || '(noch keine)'}\n\nTEXT DER FALLSAMMLUNG:\n${clip(text, 300000)}` }]
-  });
+  const pr = casesPrompt(sub, book, ch, pagesToText(pages, ch.startPage, ch.endPage));
+  const r = await completeJson({ model: 'smart', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Fallsammlung aufbereiten', budgetExempt });
   const cases = (r.faelle || []).filter(f => f && (f.sachverhalt || f.loesung));
   patchCases(subId, fileId, chId, cases);
   return cases;
@@ -318,7 +392,7 @@ export async function detectBookTitle(subId, fileId) {
   const t = await getFileText(sub, fileId);
   const head = t.pages ? t.pages.slice(0, 8).map(p => `[Seite ${p.n}]\n${p.text}`).join('\n\n') : (t.text || '').slice(0, 12000);
   const r = await completeJson({
-    model: 'fast', maxTokens: 600,
+    model: 'fast', maxTokens: 600, purpose: 'Buchtitel erkennen',
     system: 'Du liest Titelangaben aus den ersten Seiten eines Buchs.',
     messages: [{ role: 'user', content: `Wie heißt dieses Buch laut Titelseite? Gib den Titel so an, wie man das Buch nennt (inkl. Band, z. B. „Bürgerliches Recht II“), ohne Verlag.\nJSON: {"titel":"…","autoren":["Nachname", …],"auflage":"z. B. 16. Auflage oder leer"}\n\n${clip(head, 15000)}` }]
   });
@@ -351,7 +425,7 @@ export async function analyzeUnit(subId, fileId, onStatus = () => {}) {
     onStatus('Analysiere Einheit …');
     const unit = sub.units.find(u => u.fileId === fileId);
     const r = await completeJson({
-      model: 'smart', maxTokens: 8000,
+      model: 'smart', maxTokens: 8000, purpose: 'Einheit analysieren',
       system: 'Du analysierst das Transkript einer Lehrveranstaltungseinheit (Vorlesung/Arbeitsgemeinschaft). Gib nur wieder, was im Transkript vorkommt. Transkripte enthalten Sprechfehler – interpretiere sinnvoll.',
       messages: [{ role: 'user', content: `Einheit: „${unit.title}“\n\nAnalysiere als JSON:\n{\n "thema": "Hauptthema in einer Zeile",\n "ueberblick": "Worum ging es in der Einheit (Markdown, 1–3 Absätze)",\n "kernthemen": [{"titel": "…", "erklaerung": "prüfungsrelevante Erklärung in Markdown"}],\n "stolperfallen": ["…"],\n "profBetont": [{"hinweis": "Was die Vortragende/der Vortragende als wichtig/prüfungsrelevant betont hat", "kontext": "kurzes Zitat oder Umschreibung"}],\n "faelle": [{"kurz": "in der Einheit besprochene Fälle/Beispiele", "loesung": "…"}],\n "begriffe": [{"begriff": "…", "erklaerung": "…"}],\n "normen": ["§ … ABGB"],\n "kapitelIds": ["IDs der passenden Lehrbuchkapitel aus der Liste unten"]\n}\n\nLEHRBUCHKAPITEL (ID | Titel):\n${chapterListForPrompt(sub) || '(noch keine)'}\n\nTRANSKRIPT:\n${clip(t.text, 260000)}` }]
     });
@@ -372,7 +446,7 @@ export async function analyzeAltklausur(subId, fileId, onStatus = () => {}) {
     onStatus('Analysiere Klausur …');
     const k = sub.altklausuren.find(x => x.fileId === fileId);
     const r = await completeJson({
-      model: 'smart', maxTokens: 9000,
+      model: 'smart', maxTokens: 9000, purpose: 'Altklausur analysieren',
       system: 'Du analysierst eine juristische Altklausur (österreichisches Recht) für die Prüfungsvorbereitung. Wenn eine Lösung/Musterlösung beiliegt, nutze sie. Sonst leite die Lösung aus dem österreichischen Recht ab und kennzeichne sie als „Lösungsskizze (KI)“.',
       messages: [{ role: 'user', content: `Altklausur: „${k.title}“\n\nJSON:\n{\n "titel": "…", "datum": "falls erkennbar", "dauer": "falls erkennbar",\n "faelle": [{\n   "nr": 1, "kurz": "Schlagwort-Titel des Falls", "sachverhalt": "der Sachverhalt möglichst wörtlich", "fragen": ["Fallfragen"],\n   "ansprueche": [{"wer": "…", "gegen": "…", "was": "…", "grundlage": "Anspruchsgrundlage mit Norm"}],\n   "loesung": "Lösungsskizze in Markdown", "loesungQuelle": "Musterlösung|KI",\n   "themen": ["…"], "kapitelIds": ["passende Kapitel-IDs"], "stolperfallen": ["…"]\n }],\n "schwerpunkte": ["Themen-Schwerpunkte der Klausur"],\n "stolperfallen": ["übergreifende Fallen"]\n}\n\nLEHRBUCHKAPITEL (ID | Titel):\n${chapterListForPrompt(sub) || '(noch keine)'}\n\nKLAUSUR:\n${clip(t.text, 200000)}` }]
     });
@@ -387,7 +461,7 @@ export async function altklausurOverview(subId) {
   const done = sub.altklausuren.filter(k => k.analysis);
   const digest = done.map(k => ({ titel: k.title, faelle: (k.analysis.faelle || []).map(f => ({ kurz: f.kurz, themen: f.themen, ansprueche: (f.ansprueche || []).map(a => a.grundlage), kapitelIds: f.kapitelIds, stolperfallen: f.stolperfallen })), schwerpunkte: k.analysis.schwerpunkte }));
   const r = await completeJson({
-    model: 'smart', maxTokens: 6000,
+    model: 'smart', maxTokens: 6000, purpose: 'Altklausuren auswerten',
     system: 'Du wertest mehrere analysierte Altklausuren gemeinsam aus.',
     messages: [{ role: 'user', content: `JSON:\n{\n "dauerbrenner": [{"thema": "…", "haeufigkeit": Anzahl Klausuren, "kapitelIds": ["…"], "typischeKonstellation": "…"}],\n "anspruchsgrundlagen": [{"grundlage": "…", "haeufigkeit": Zahl}],\n "stolperfallen": ["immer wiederkehrende Fallen"],\n "muster": "Wie sind die Klausuren aufgebaut (Markdown)",\n "empfehlungen": ["konkrete Lernempfehlungen"]\n}\n\nKAPITEL:\n${chapterListForPrompt(sub)}\n\nALTKLAUSUREN:\n${JSON.stringify(digest).slice(0, 150000)}` }]
   });
@@ -408,7 +482,7 @@ export async function mapScope(subId, examId, onStatus = () => {}) {
   if (!scopeText.trim()) throw new Error('Keine Stoffeingrenzung vorhanden.');
   onStatus('Ordne Stoffeingrenzung den Kapiteln zu …');
   const r = await completeJson({
-    model: 'smart', maxTokens: 6000,
+    model: 'smart', maxTokens: 6000, purpose: 'Stoffeingrenzung',
     system: 'Du ordnest eine Stoffeingrenzung den Kapiteln von Lehrbüchern zu.',
     messages: [{ role: 'user', content: `Prüfung: ${exam.name} (${exam.type})\n\nOrdne JEDEM Kapitel einen Status zu:\n- "muss": ausdrücklich Prüfungsstoff und zentral\n- "wichtig": Prüfungsstoff\n- "optional": nur am Rande / Grundlagenwissen\n- "raus": laut Eingrenzung nicht Prüfungsstoff\nJSON: {"kapitel": [{"id": "…", "status": "…", "grund": "kurz"}], "hinweise": "Besonderheiten der Eingrenzung (Markdown)"}\n\nKAPITEL (ID | Titel — Kurzfassung):\n${chapterListForPrompt(sub, true)}\n\nSTOFFEINGRENZUNG:\n${clip(scopeText, 60000)}` }]
   });
@@ -536,7 +610,7 @@ export async function summarizeRuling(subId, rulingId) {
   const t = await loadRulingTexts(subId, rulingId);
   if (!t.full && !t.rs.length) throw new Error('Kein Text zu dieser Entscheidung verfügbar.');
   const res = await completeJson({
-    model: 'smart', maxTokens: 6000,
+    model: 'smart', maxTokens: 6000, purpose: 'OGH-Urteil aufbereiten',
     system: 'Du bereitest eine Entscheidung des österreichischen OGH für eine Jusstudentin auf. Halte dich streng an den Entscheidungstext. Für diesen Bereich gilt: Die Entscheidung ist eine Ergänzung zum Lehrbuchstoff.',
     messages: [{ role: 'user', content: `JSON:\n{\n "gz": "Geschäftszahl", "datum": "…", "gericht": "OGH",\n "kernaussagen": ["die tragenden Rechtssätze, knapp"],\n "sachverhalt": "kurz, Markdown", "rechtsfrage": "…", "entscheidung": "Ergebnis",\n "begruendung": "wesentliche Argumentation, Markdown",\n "bedeutung": "Bedeutung für Studium und Prüfung, Bezug zur Lehre",\n "normen": ["§ …"],\n "kapitelIds": ["passende Lehrbuchkapitel"],\n "stichworte": ["…"]\n}\n\nKAPITEL:\n${chapterListForPrompt(sub)}\n\n${t.rs.length ? 'RECHTSSÄTZE:\n' + t.rs.join('\n---\n').slice(0, 30000) + '\n\n' : ''}ENTSCHEIDUNGSTEXT:\n${clip(t.full, 200000)}` }]
   });

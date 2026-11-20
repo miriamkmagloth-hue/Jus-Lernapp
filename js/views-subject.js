@@ -6,6 +6,7 @@ import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from '
 import { runJob, activeJobs, jobs } from './jobs.js';
 import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
+import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
 import { isSignedIn } from './drive.js';
 
@@ -27,6 +28,25 @@ function badge(sub, tab) {
   if (tab === 'ogh') n = sub.rulings.filter(r => r.isNew).length;
   return n ? ` <span class="pill gold">${n}</span>` : '';
 }
+// Bearbeitungsstand und Aktionen eines Buchs (Kostenvoranschlag, Freigabe, Hintergrund)
+function bookAction(b, job) {
+  const role = bookRole(b);
+  const verb = role === 'faelle' ? 'Fälle aufbereiten' : 'Zusammenfassen';
+  if (b.batch) {
+    const pc = b.batch.progress || {};
+    const done = (pc.succeeded || 0) + (pc.errored || 0);
+    return `<div class="notice small" style="margin-top:8px">⏳ <strong>Läuft im Hintergrund</strong> (${b.batch.n} Kapitel, gestartet ${new Date(b.batch.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' })}${done ? `, ${done} fertig` : ''}). Du kannst die App schließen – die Ergebnisse werden beim nächsten Öffnen abgeholt. Meist dauert das unter einer Stunde.
+      <div style="margin-top:6px"><button class="btn ghost small" data-cancelbatch="${b.fileId}">Abbrechen</button></div></div>`;
+  }
+  if (job && !job.done) return `<div class="small muted" style="margin-top:8px"><span class="spinner"></span> ${esc(job.status)}</div>`;
+  if (b.status === 'bereit' && b.estimate) {
+    return `<div class="notice gold small" style="margin-top:8px"><strong>Bereit.</strong> ${verb}: ${b.estimate.chapters} Kapitel, kostet ca. <strong>${b.estimate.usd.toLocaleString('de-AT', { minimumFractionDigits: 2 })} $</strong>${b.estimate.batch ? ' (Hintergrund-Modus, halber Preis)' : ''}. Einmalig – danach kostet das Lesen der Zusammenfassungen nichts mehr.
+      <div style="margin-top:6px"><button class="btn small" data-approve="${b.fileId}">${verb} freigeben</button></div></div>`;
+  }
+  if (b.status === 'fertig') return '';
+  return `<div style="margin-top:8px"><button class="btn secondary small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut vorbereiten' : 'Vorbereiten (kostenlos)'}</button></div>`;
+}
+
 function mountJobBar(el) { const b = el.querySelector('[data-jobs]'); if (b) renderJobBar(b); }
 const notFound = el => { el.innerHTML = '<div class="card">Nicht gefunden. <a href="#/faecher">Zu den Fächern</a></div>'; };
 
@@ -112,12 +132,12 @@ function tabStoff(el, sub) {
     if (role === 'faelle') {
       const nCases = b.chapters.reduce((a, c) => a + (c.cases?.length || 0), 0);
       const doneF = b.chapters.filter(c => c.cases).length;
-      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}${b.status === 'fertig' || (job && !job.done) ? '' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
+      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}</div></div>${bookAction(b, job)}
         ${nCases ? `<a class="btn secondary small" href="#/fach/${sub.id}/falltraining" style="margin-top:8px">Fälle ansehen und lösen</a>` : ''}</div>`;
     }
     if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? 'wird nicht verwendet' : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
     return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div>${b.authors?.length ? `<div class="small">${esc(b.authors.join(' / '))}${b.edition ? ' · ' + esc(b.edition) : ''}</div>` : ''}<div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
-      <div class="row">${roleSel}${b.status === 'fertig' ? '' : job && !job.done ? '<span class="spinner"></span>' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut versuchen' : b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
+      <div class="row">${roleSel}</div></div>${bookAction(b, job)}
       ${b.error ? `<div class="notice err small">${esc(b.error)}</div>` : ''}
       <ul class="list">${b.chapters.map(c => {
         const p = prog[c.id];
@@ -152,10 +172,24 @@ function tabStoff(el, sub) {
   });
   el.querySelectorAll('[data-proc]').forEach(btn => btn.onclick = () => {
     const fid = btn.dataset.proc;
-    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); if (b.status === 'pausiert') b.status = 'gegliedert'; });
+    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); if (['pausiert', 'fehler'].includes(b.status)) b.status = 'gegliedert'; b.error = null; });
     const b = sub.books.find(x => x.fileId === fid);
-    runJob('book:' + fid, `Lehrbuch „${b.title}“ verarbeiten`, st => processBook(sub.id, fid, st), { subId: sub.id });
+    runJob('book:' + fid, `„${b.title}“ vorbereiten`, st => processBook(sub.id, fid, st), { subId: sub.id });
     render();
+  });
+  el.querySelectorAll('[data-approve]').forEach(btn => btn.onclick = async () => {
+    const fid = btn.dataset.approve;
+    const b = sub.books.find(x => x.fileId === fid);
+    const ok = await confirmDialog(`„${b.title}“: ${b.estimate.chapters} Kapitel ${bookRole(b) === 'faelle' ? 'aufbereiten' : 'zusammenfassen'} für ca. ${b.estimate.usd.toLocaleString('de-AT', { minimumFractionDigits: 2 })} $ von deinem Claude-Guthaben?`, 'Ja, starten');
+    if (!ok) return;
+    store.update(s => { const x = s.subjects.find(y => y.id === sub.id).books.find(y => y.fileId === fid); x.approved = true; x.error = null; });
+    runJob('book:' + fid, `„${b.title}“ ${bookRole(b) === 'faelle' ? 'aufbereiten' : 'zusammenfassen'}`, st => processBook(sub.id, fid, st), { subId: sub.id });
+    render();
+  });
+  el.querySelectorAll('[data-cancelbatch]').forEach(btn => btn.onclick = async () => {
+    const b = sub.books.find(x => x.fileId === btn.dataset.cancelbatch);
+    if (!(await confirmDialog('Hintergrund-Auftrag abbrechen? Bereits fertige Kapitel bleiben erhalten und werden abgeholt.', 'Abbrechen'))) return;
+    try { await cancelBatch(b.batch.id); toast('Wird abgebrochen – fertige Kapitel werden gleich abgeholt.'); } catch (e) { toast(e.message, 6000); }
   });
 }
 
@@ -228,7 +262,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
     mountChat(body.querySelector('#chat'), {
       history: chRef.chat,
       onSave: () => store.update(() => {}, { silent: true }),
-      system: async () => `Du besprichst mit der Studentin das Lehrbuchkapitel „${ch.title}“ aus „${book.title}“. Beantworte Fragen ausschließlich auf Grundlage dieses Kapiteltexts mit Seitenangaben. Wenn sie dich bittet, sie abzufragen, stelle eine Frage nach der anderen, warte auf ihre Antwort und gib dann Feedback.\n\nKAPITELTEXT:\n${await chapterText(store.subject(subId), chId)}`,
+      system: async () => `Du besprichst mit der Studentin das Lehrbuchkapitel „${ch.title}“ aus „${book.title}“. Beantworte Fragen ausschließlich auf Grundlage dieses Kapiteltexts mit Seitenangaben. Wenn sie dich bittet, sie abzufragen, stelle eine Frage nach der anderen, warte auf ihre Antwort und gib dann Feedback.\n\nKAPITELTEXT:\n${clip(await chapterText(store.subject(subId), chId), 100000)}`,
       placeholder: 'Frage zum Kapitel …',
       emptyText: 'Frag mich alles zu diesem Kapitel – oder lass dich abfragen.',
       quickPrompts: [
@@ -296,8 +330,8 @@ export function unitView(el, subId, fileId, part = 'analyse') {
         const t = await getFileText(store.subject(subId), fileId);
         const chs = (ref.analysis?.kapitelIds || []).map(id => findChapter(store.subject(subId), id)).filter(Boolean);
         let lb = '';
-        for (const c of chs.slice(0, 3)) lb += `\n\n### Lehrbuchkapitel „${c.chapter.title}“\n` + (await chapterText(store.subject(subId), c.chapter.id)).slice(0, 120000);
-        return `Du diskutierst mit der Studentin die Lehrveranstaltungseinheit „${ref.title}“. Grundlage sind das Transkript und die zugehörigen Lehrbuchkapitel. Unterscheide klar, was aus der Einheit und was aus dem Lehrbuch stammt.\n\nTRANSKRIPT:\n${t.text.slice(0, 200000)}${lb ? '\n\nLEHRBUCH:' + lb : ''}`;
+        for (const c of chs.slice(0, 2)) lb += `\n\n### Lehrbuchkapitel „${c.chapter.title}“\n` + (await chapterText(store.subject(subId), c.chapter.id)).slice(0, 40000);
+        return `Du diskutierst mit der Studentin die Lehrveranstaltungseinheit „${ref.title}“. Grundlage sind das Transkript und die zugehörigen Lehrbuchkapitel. Unterscheide klar, was aus der Einheit und was aus dem Lehrbuch stammt.\n\nTRANSKRIPT:\n${t.text.slice(0, 120000)}${lb ? '\n\nLEHRBUCH:' + lb : ''}`;
       },
       placeholder: 'Frage zur Einheit …',
       emptyText: 'Diskutiere die Einheit: Fragen, Unklarheiten, Fälle aus der Einheit.',

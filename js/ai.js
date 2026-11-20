@@ -1,5 +1,6 @@
 // KI-Schicht: ein Aufruf, drei Anbieter (Claude, Gemini, OpenAI)
 import { store } from './store.js';
+import { costOf, recordUsage, checkBudget, estimate } from './costs.js';
 
 export const BASE_RULES = `Du bist ein Lernassistent für eine Jusstudentin in Österreich.
 Verbindliche Regeln:
@@ -26,15 +27,19 @@ export function aiReady() {
 }
 
 // messages: [{role:'user'|'assistant', content:string}]
-export async function complete({ system = '', messages, model = 'smart', maxTokens = 4000, json = false, cacheSystem = true, signal } = {}) {
+export async function complete({ system = '', messages, model = 'smart', maxTokens = 4000, json = false, cacheSystem = true, signal, purpose = 'KI-Anfrage', budgetExempt = false } = {}) {
   const c = cfg();
   if (!c.key) throw new Error('Kein KI-Schlüssel hinterlegt. Bitte in den Einstellungen eintragen.');
   const sys = system ? BASE_RULES + '\n\n' + system : BASE_RULES;
   const modelName = c.models[model] || c.models.smart;
+  // Kostenbremse: vorab schätzen und bei erreichtem Limit nachfragen
+  const inChars = sys.length + messages.reduce((a, m) => a + String(m.content || '').length, 0);
+  if (!budgetExempt) await checkBudget(estimate(modelName, inChars, Math.round(maxTokens * 0.4)), purpose);
+  const track = u => recordUsage(costOf(modelName, u), purpose);
   let lastErr;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      if (c.provider === 'anthropic') return await anthropic(c.key, modelName, sys, messages, maxTokens, cacheSystem, signal);
+      if (c.provider === 'anthropic') return await anthropic(c.key, modelName, sys, messages, maxTokens, cacheSystem, signal, track);
       if (c.provider === 'gemini') return await gemini(c.key, modelName, sys, messages, maxTokens, json, signal);
       if (c.provider === 'openai') return await openai(c.key, modelName, sys, messages, maxTokens, json, signal);
       throw new Error('Unbekannter KI-Anbieter');
@@ -57,7 +62,7 @@ async function httpErr(res, label) {
   return e;
 }
 
-async function anthropic(key, model, system, messages, maxTokens, cacheSystem, signal) {
+async function anthropic(key, model, system, messages, maxTokens, cacheSystem, signal, track = () => {}) {
   const body = {
     model, max_tokens: maxTokens, stream: true,
     system: [{ type: 'text', text: system, ...(cacheSystem && system.length > 4000 ? { cache_control: { type: 'ephemeral' } } : {}) }],
@@ -71,12 +76,14 @@ async function anthropic(key, model, system, messages, maxTokens, cacheSystem, s
   if (!res.ok) throw await httpErr(res, 'Claude');
   if ((res.headers.get('content-type') || '').includes('application/json')) {
     const j = await res.json();
+    track(j.usage || {});
     return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
   }
   // Antwort Stück für Stück lesen: hält die Verbindung auch bei langen Antworten am Handy offen
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '', out = '', stop = '';
+  const usage = {};
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -87,10 +94,12 @@ async function anthropic(key, model, system, messages, maxTokens, cacheSystem, s
       if (!line.startsWith('data:')) continue;
       let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
       if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') out += ev.delta.text;
-      else if (ev.type === 'message_delta' && ev.delta?.stop_reason) stop = ev.delta.stop_reason;
+      else if (ev.type === 'message_start') Object.assign(usage, ev.message?.usage || {});
+      else if (ev.type === 'message_delta') { if (ev.delta?.stop_reason) stop = ev.delta.stop_reason; if (ev.usage) Object.assign(usage, ev.usage); }
       else if (ev.type === 'error') { const e = new Error('Claude: ' + (ev.error?.message || 'Fehler')); e.retry = /overloaded|rate/i.test(ev.error?.type || ''); throw e; }
     }
   }
+  if (usage.input_tokens || usage.output_tokens) track(usage);
   if (!out && !stop) { const e = new Error('Verbindung unterbrochen'); e.retry = true; throw e; }
   return out;
 }
@@ -148,7 +157,7 @@ export async function completeJson(opts) {
   try { return parseJson(text); }
   catch (e) {
     // zweiter Versuch: KI bitten, das JSON zu reparieren
-    const fixed = await complete({ model: 'fast', maxTokens: opts.maxTokens || 4000, json: true, system: 'Repariere das folgende fehlerhafte JSON. Gib nur das korrigierte JSON aus.', messages: [{ role: 'user', content: text.slice(0, 60000) }] });
+    const fixed = await complete({ model: 'fast', maxTokens: opts.maxTokens || 4000, json: true, purpose: opts.purpose, budgetExempt: opts.budgetExempt, system: 'Repariere das folgende fehlerhafte JSON. Gib nur das korrigierte JSON aus.', messages: [{ role: 'user', content: text.slice(0, 60000) }] });
     return parseJson(fixed);
   }
 }
@@ -158,4 +167,49 @@ export function clip(text, max = 300000) {
   if (!text || text.length <= max) return text || '';
   const head = Math.floor(max * 0.8);
   return text.slice(0, head) + '\n\n[… Text gekürzt …]\n\n' + text.slice(text.length - (max - head));
+}
+
+// ---------- Hintergrund-Modus (Message Batches, halber Preis) ----------
+const AH = key => ({ 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' });
+export function batchAvailable() {
+  const c = cfg();
+  return c.provider === 'anthropic' && !!c.key && store.state.settings.useBatch !== false;
+}
+// reqs: [{ id, system, prompt, maxTokens, model }]
+export async function submitBatch(reqs) {
+  const c = cfg();
+  const requests = reqs.map(r => {
+    const sys = BASE_RULES + '\n\n' + (r.system || '') + '\n\nAntworte AUSSCHLIESSLICH mit gültigem JSON ohne erklärenden Text davor oder danach.';
+    return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || c.models.smart, max_tokens: r.maxTokens || 8000, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.prompt }] } };
+  });
+  const res = await fetch('https://api.anthropic.com/v1/messages/batches', { method: 'POST', headers: AH(c.key), body: JSON.stringify({ requests }) });
+  if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
+  const j = await res.json();
+  return { id: j.id, model: requests[0]?.params.model };
+}
+export async function batchStatus(id) {
+  const c = cfg();
+  const res = await fetch('https://api.anthropic.com/v1/messages/batches/' + encodeURIComponent(id), { headers: AH(c.key) });
+  if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
+  return res.json();
+}
+// liefert [{ id, ok, text, usage }]
+export async function batchResults(id, model) {
+  const c = cfg();
+  const res = await fetch('https://api.anthropic.com/v1/messages/batches/' + encodeURIComponent(id) + '/results', { headers: AH(c.key) });
+  if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
+  const lines = (await res.text()).split('\n').filter(l => l.trim());
+  return lines.map(l => {
+    let j; try { j = JSON.parse(l); } catch { return null; }
+    const ok = j.result?.type === 'succeeded';
+    const msg = j.result?.message;
+    if (ok && msg?.usage) recordUsage(costOf(model || msg.model, msg.usage, { batch: true }), 'Lehrbücher (Hintergrund)');
+    return { id: j.custom_id, ok, text: ok ? (msg.content || []).filter(b => b.type === 'text').map(b => b.text).join('') : '', error: j.result?.error?.message || j.result?.type };
+  }).filter(Boolean);
+}
+export async function cancelBatch(id) {
+  const c = cfg();
+  const res = await fetch('https://api.anthropic.com/v1/messages/batches/' + encodeURIComponent(id) + '/cancel', { method: 'POST', headers: AH(c.key) });
+  if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
+  return res.json();
 }

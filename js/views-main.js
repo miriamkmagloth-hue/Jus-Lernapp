@@ -6,6 +6,7 @@ import { setTitle, render, autoUpdate } from './app.js';
 import { computePlan, activeExams, subjectMastery, paceFor, paceText } from './planner.js';
 import { CATEGORIES } from './processing.js';
 import { aiReady, completeJson } from './ai.js';
+import { spentToday, spentMonth, limits, usd as fmtUsd } from './costs.js';
 import { REASONS, cal, addEntry, removeEntry, offReason, holidays, todayIso, iso } from './calendar.js';
 import { activeJobs } from './jobs.js';
 import { dueCards } from './views-learn.js';
@@ -39,6 +40,8 @@ export function dashboard(el) {
   html += off
     ? `<div class="notice ok"><div class="row between"><span>${off.icon} <strong>Heute ist lernfrei:</strong> ${esc(off.label)}. Der Plan rechnet damit.</span>${off.entry && off.entry.from === off.entry.to ? `<button class="btn ghost small" data-undo="${off.entry.id}">Doch lernen</button>` : ''}</div></div>`
     : `<div class="row" style="margin-bottom:14px"><button class="btn secondary small" data-quick="frei">🌿 Heute überspringen</button><button class="btn secondary small" data-quick="krank-ich">🤒 Ich bin krank</button><button class="btn secondary small" data-quick="krank-kind">🧸 Kind ist krank</button><a class="btn ghost small" href="#/kalender">📅 Lernkalender</a></div>`;
+
+  if (aiReady()) { const l = limits(), t = spentToday(); html += `<div class="small muted" style="margin:-4px 0 12px"><a href="#/einstellungen" style="color:inherit">💶 KI heute ${fmtUsd(t)} von ${fmtUsd(l.daily)} · Monat ${fmtUsd(spentMonth())} von ${fmtUsd(l.monthly)}</a></div>`; }
 
   // nächste Prüfungen
   const exams = st.subjects.flatMap(s => activeExams(s).map(e => ({ s, e }))).sort((a, b) => (a.e.date || '9999').localeCompare(b.e.date || '9999'));
@@ -278,6 +281,14 @@ export function settingsView(el) {
     <button class="btn secondary small" data-a="scan">Jetzt nach neuen Dateien suchen</button></div>
   </div>
 
+  <div class="card"><h3>💶 KI-Kosten</h3>
+    <div class="grid3"><div class="stat"><div class="num">${fmtUsd(spentToday())}</div><div class="lbl">heute</div></div><div class="stat"><div class="num">${fmtUsd(spentMonth())}</div><div class="lbl">dieser Monat</div></div></div>
+    <div class="grid2" style="margin-top:12px"><label class="field"><span>Tageslimit ($)</span><input type="number" min="0" step="0.5" id="limDay" value="${limits().daily}"></label><label class="field"><span>Monatslimit ($)</span><input type="number" min="0" step="1" id="limMonth" value="${limits().monthly}"></label></div>
+    <p class="tiny muted">Ist ein Limit erreicht, fragt die App vor jeder weiteren KI-Anfrage nach. Freigegebene Lehrbücher zählen mit, werden aber nicht unterbrochen.</p>
+    <label class="checkline"><input type="checkbox" id="useBatch" ${s.useBatch !== false ? 'checked' : ''}> Lehrbücher im Hintergrund-Modus verarbeiten (halber Preis, gleiche Qualität, dauert etwas länger)</label>
+    ${(() => { const days = Object.entries(store.state.usage?.days || {}).sort().reverse().slice(0, 14); return days.length ? `<details style="margin-top:8px"><summary class="small">Verbrauch der letzten Tage</summary><ul class="list">${days.map(([d, v]) => `<li class="small"><div class="row between"><span>${fmtDate(d)}</span><strong>${fmtUsd(v.usd)}</strong></div><div class="tiny muted">${Object.entries(v.by || {}).sort((a, b) => b[1] - a[1]).map(([k, x]) => `${esc(k)}: ${fmtUsd(x)}`).join(' · ')}</div></li>`).join('')}</ul><p class="tiny muted">Erfasst seit dieser Version (20.11.2026, abends); die genauen Abrechnungsdaten stehen in der Anthropic Console unter „Usage“.</p></details>` : ''; })()}
+  </div>
+
   <div class="card"><h3>KI</h3>
     <label class="field"><span>Anbieter</span><select id="provider">
       <option value="anthropic" ${prov === 'anthropic' ? 'selected' : ''}>Claude (Anthropic) – empfohlen</option>
@@ -292,7 +303,7 @@ export function settingsView(el) {
   </div>
 
   <div class="card"><h3>Verhalten</h3>
-    <label class="checkline"><input type="checkbox" id="autoProcess" ${s.autoProcess !== false ? 'checked' : ''}> Neue Dateien automatisch verarbeiten</label>
+    <label class="checkline"><input type="checkbox" id="autoProcess" ${s.autoProcess !== false ? 'checked' : ''}> Neue Transkripte, Altklausuren und eigene Urteile automatisch analysieren (Lehrbücher werden nur vorbereitet und erst nach deiner Freigabe zusammengefasst)</label>
     <label class="checkline"><input type="checkbox" id="speak" ${s.speakQuestions ? 'checked' : ''}> Fragen in der mündlichen Simulation vorlesen</label>
     <label class="field" style="margin-top:10px"><span>RIS-Weiterleitung (nur nötig, wenn die App nicht über Netlify läuft)</span><input type="url" id="risProxy" value="${esc(s.risProxy)}" placeholder="https://…"></label>
   </div>
@@ -312,6 +323,8 @@ export function settingsView(el) {
       st.settings.autoProcess = el.querySelector('#autoProcess').checked;
       st.settings.speakQuestions = el.querySelector('#speak').checked;
       st.settings.risProxy = el.querySelector('#risProxy').value.trim();
+      st.settings.budget = { daily: Math.max(0, Number(el.querySelector('#limDay').value) || 0), monthly: Math.max(0, Number(el.querySelector('#limMonth').value) || 0) };
+      st.settings.useBatch = el.querySelector('#useBatch').checked;
     });
   };
   el.querySelector('#importFile').onchange = async e => {

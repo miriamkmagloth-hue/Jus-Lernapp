@@ -58,7 +58,8 @@ export function emptyState() {
     progress: { chapters: {}, sessions: [], mistakes: [], cases: [], orals: [], quizzes: [] },
     cards: {},
     srs: {},
-    calendar: { entries: [], holidaysOff: true }
+    calendar: { entries: [], holidaysOff: true },
+    usage: { days: {} }
   };
 }
 
@@ -121,6 +122,7 @@ function migrate(s) {
   out.cards = s.cards || {};
   out.srs = s.srs || {};
   out.calendar = { entries: [], holidaysOff: true, ...(s.calendar || {}) };
+  out.usage = s.usage || { days: {} };
   out.subjects = (s.subjects || []).map(normalizeSubject);
   return out;
 }
