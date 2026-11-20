@@ -1,5 +1,5 @@
 // Verarbeitung: Ordner scannen, Lehrbücher gliedern und zusammenfassen, Transkripte/Altklausuren/Urteile analysieren
-import { store, uid, textGet, textSet, allChapters, findChapter } from './store.js';
+import { store, uid, textGet, textSet, allChapters, findChapter, isStudyChapter } from './store.js';
 import { listRecursive, downloadFile, getFileMeta } from './drive.js';
 import { fileToText, isSupported, pagesToText } from './extract.js';
 import { completeJson, clip } from './ai.js';
@@ -92,7 +92,7 @@ function patchBook(subId, fileId, fn) {
 }
 
 // ---------- Lehrbuch: Gliederung + Zusammenfassungen ----------
-const SKIP_TITLES = /^(inhalt|inhaltsverzeichnis|inhaltsübersicht|vorwort|abkürzung|literatur|stichwort|sachregister|register|impressum|titel|cover|umschlag|benutzungshinweise|verzeichnis)/i;
+const SKIP_TITLES = { test: t => !isStudyChapter({ title: t }) || /^(cover|umschlag|titel|titelseite)$/i.test(String(t).trim()) };
 
 export async function processBook(subId, fileId, onStatus = () => {}) {
   let sub = store.subject(subId);
@@ -204,8 +204,8 @@ export async function summarizeChapter(subId, fileId, chId, pagesOpt) {
   const text = pagesToText(pages, ch.startPage, ch.endPage);
   const r = await completeJson({
     model: 'smart', maxTokens: 9000,
-    system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x].`,
-    messages: [{ role: 'user', content: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "kurzfassung": "3–6 Sätze: worum geht es",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}` }]
+    system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du.`,
+    messages: [{ role: 'user', content: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}` }]
   });
   store.update(s => {
     const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId);

@@ -178,10 +178,19 @@ export function newExam(partial = {}) {
   });
 }
 
-// Alle Kapitel eines Fachs (über alle Lehrbücher)
-export function allChapters(sub) {
+// Verzeichnisse, Vorwort usw. sind kein Lernstoff
+const NO_STUDY = /^(?:[\W\d]|[IVX]+\.\s)*(?:(?:inhaltsverzeichnis|inhaltsübersicht|vorwort|vorworte|geleitwort|abkürzungen|abkürzungsverzeichnis|literatur|literaturverzeichnis|literaturhinweise|schrifttum|schrifttumsverzeichnis|stichwortverzeichnis|sachregister|sachverzeichnis|register|benutzungshinweise|hinweise zur benutzung|impressum|titelei)(?![a-zäöüß])|(?:inhalt|übersicht|gliederung)\s*$)/i;
+export function isStudyChapter(c) {
+  if (c.hidden === true) return false;
+  if (c.hidden === false) return true; // ausdrücklich eingeblendet
+  if (c.summary && c.summary.pruefungsrelevant === false) return false;
+  return !NO_STUDY.test(c.title || '');
+}
+
+// Alle Kapitel eines Fachs (über alle Lehrbücher) – standardmäßig nur echter Lernstoff
+export function allChapters(sub, { includeHidden = false } = {}) {
   const out = [];
-  for (const b of sub.books || []) for (const c of b.chapters || []) out.push({ ...c, bookId: b.fileId, bookTitle: b.title });
+  for (const b of sub.books || []) for (const c of b.chapters || []) if (includeHidden || isStudyChapter(c)) out.push({ ...c, bookId: b.fileId, bookTitle: b.title });
   return out;
 }
 export function findChapter(sub, chId) {

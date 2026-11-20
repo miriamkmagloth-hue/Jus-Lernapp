@@ -6,7 +6,9 @@ Verbindliche Regeln:
 - Es gilt ausschließlich ÖSTERREICHISCHES Recht (ABGB, UGB, KSchG, ZPO, StGB, B-VG usw.). Niemals deutsches Recht (BGB, StGB-D, ZPO-D) oder deutsche Terminologie verwenden. Österreichische Fachsprache verwenden (z. B. "Gewährleistung", "Schadenersatz", "Anspruchsgrundlage", "OGH").
 - Der Prüfungsstoff ist AUSSCHLIESSLICH der Inhalt der bereitgestellten Lehrbuchtexte. Füge keinen Stoff hinzu, der dort nicht steht, und lass nichts Wesentliches weg. Wenn etwas im Lehrbuch nicht vorkommt, sag das ausdrücklich.
 - Belege Aussagen mit Seitenangaben im Format [S. 123] gemäß den Seitenmarkierungen im Text.
-- Antworte auf Deutsch, klar, präzise und prüfungsorientiert.`;
+- Antworte auf Deutsch, klar, präzise und prüfungsorientiert.
+- Wenn du Prüfungsfragen, Karteikarten, Fälle oder Tests erstellst: Frage AUSSCHLIESSLICH juristischen Inhalt ab – Rechtsinstitute, Begriffe und Definitionen, Voraussetzungen, Rechtsfolgen, Abgrenzungen, Ausnahmen, Zusammenhänge, Wertungen und die Anwendung auf konkrete Sachverhalte. Verstehe den Sinn des Kapitels und prüfe, ob die Studentin ihn verstanden hat.
+- NIEMALS fragen nach: Aufbau oder Gliederung des Buchs, Inhaltsverzeichnis/Inhaltsübersicht, Kapitel- oder Abschnittsnummern und -titeln, Seitenzahlen, Randziffern, Autorinnen/Autoren, Auflage, Vorwort, Literaturhinweisen oder Abkürzungen. Solche Textteile ignorierst du vollständig.`;
 
 function cfg() {
   const s = store.state.settings;

@@ -1,5 +1,5 @@
 // Ansichten innerhalb eines Fachs
-import { store, allChapters, findChapter, textGet, syncExam, currentAttempt } from './store.js';
+import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL } from './planner.js';
@@ -110,6 +110,7 @@ function tabStoff(el, sub) {
       <ul class="list">${b.chapters.map(c => {
         const p = prog[c.id];
         const scope = exam?.scopeMap?.[c.id];
+        if (!isStudyChapter(c)) return `<li><a class="item" href="#/fach/${sub.id}/kapitel/${c.id}" style="opacity:.55"><span class="dot"></span><div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">kein Lernstoff – ausgeblendet</div></div><span class="chev">›</span></a></li>`;
         return `<li><a class="item" href="#/fach/${sub.id}/kapitel/${c.id}"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span>
           <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div></div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
@@ -133,7 +134,14 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
   const parts = [['zusammenfassung', 'Zusammenfassung'], ['test', 'Multiple Choice'], ['fragen', 'Freie Fragen'], ['karten', 'Karteikarten'], ['chat', 'Chat'], ['text', 'Lehrbuchtext']];
   el.innerHTML = `<div class="small muted">${esc(sub.name)} · ${esc(book.title)} · S. ${esc(ch.startLabel || ch.startPage)}–${esc(ch.endLabel || ch.endPage)}</div>
     <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %` : 'noch nicht eingestuft'}</span></div>
-    <div class="tabs">${parts.map(([k, l]) => `<a class="tab ${k === part ? 'active' : ''}" href="#/fach/${subId}/kapitel/${chId}/${k}">${l}</a>`).join('')}</div><div id="part"></div>`;
+    ${isStudyChapter(ch) ? '' : `<div class="notice warn small">Dieses Kapitel zählt nicht als Lernstoff (z. B. Verzeichnis oder Übersicht) und kommt in Plan, Einstufung und Tests nicht vor. <button class="btn ghost small" data-vis="show">Doch als Lernstoff zählen</button></div>`}
+    <div class="tabs">${parts.map(([k, l]) => `<a class="tab ${k === part ? 'active' : ''}" href="#/fach/${subId}/kapitel/${chId}/${k}">${l}</a>`).join('')}</div><div id="part"></div>
+    ${isStudyChapter(ch) ? `<div style="margin-top:16px"><button class="btn ghost small" data-vis="hide">Kein Lernstoff – Kapitel ausblenden</button></div>` : ''}`;
+  el.querySelectorAll('[data-vis]').forEach(b => b.onclick = () => {
+    store.update(s => { findChapter(s.subjects.find(x => x.id === subId), chId).chapter.hidden = b.dataset.vis === 'hide'; });
+    toast(b.dataset.vis === 'hide' ? 'Ausgeblendet – zählt nicht mehr als Lernstoff' : 'Zählt wieder als Lernstoff');
+    render();
+  });
   const body = el.querySelector('#part');
 
   if (part === 'zusammenfassung') {
