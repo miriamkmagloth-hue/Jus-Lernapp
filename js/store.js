@@ -129,7 +129,7 @@ export function normalizeSubject(sub) {
     name: sub.name || 'Fach',
     createdAt: sub.createdAt || Date.now(),
     folders: { books: [], transcripts: [], exams: [], rulings: [], scope: [], protocols: [], ...(sub.folders || {}) },
-    exams: sub.exams || [],
+    exams: (sub.exams || []).map(syncExam),
     files: sub.files || {},
     books: sub.books || [],
     units: sub.units || [],
@@ -141,8 +141,25 @@ export function normalizeSubject(sub) {
   };
 }
 
+// Termine einer Prüfung: Haupttermin + Ersatztermine. exam.date ist immer der aktuell relevante Termin.
+export function syncExam(e) {
+  if (!Array.isArray(e.attempts) || !e.attempts.length) {
+    e.attempts = [{ date: e.date || '', result: e.status === 'bestanden' ? 'bestanden' : e.status === 'nicht_bestanden' ? 'nicht_bestanden' : 'offen' }];
+  }
+  e.attempts = e.attempts.filter((a, i) => a.date || i === 0).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+  const open = e.attempts.find(a => a.result === 'offen');
+  e.date = (open || e.attempts[e.attempts.length - 1]).date || '';
+  if (e.attempts.some(a => a.result === 'bestanden')) e.status = 'bestanden';
+  else if (!open) e.status = 'nicht_bestanden';
+  else if (e.status === 'bestanden' || e.status === 'nicht_bestanden') e.status = 'aktiv';
+  return e;
+}
+export function currentAttempt(e) {
+  return (e.attempts || []).find(a => a.result === 'offen') || null;
+}
+
 export function newExam(partial = {}) {
-  return {
+  return syncExam({
     id: uid('p_'),
     name: partial.name || 'Prüfung',
     type: partial.type || 'schriftlich',
@@ -154,8 +171,9 @@ export function newExam(partial = {}) {
     scopeFileIds: partial.scopeFileIds || [],
     scopeMap: partial.scopeMap || null, // { chapterId: 'muss'|'wichtig'|'optional'|'raus' }
     assessment: partial.assessment || null,
-    notes: partial.notes || ''
-  };
+    notes: partial.notes || '',
+    attempts: partial.attempts || null
+  });
 }
 
 // Alle Kapitel eines Fachs (über alle Lehrbücher)

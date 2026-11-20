@@ -1,5 +1,5 @@
 // Ansichten innerhalb eines Fachs
-import { store, allChapters, findChapter, textGet } from './store.js';
+import { store, allChapters, findChapter, textGet, syncExam, currentAttempt } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL } from './planner.js';
@@ -53,7 +53,10 @@ function tabPlan(el, sub) {
     const d = daysUntil(e.date);
     const cls = { gut: 'green', knapp: 'yellow', eng: 'red' }[plan.status] || 'blue';
     html += `<div class="card"><div class="row between"><div><div class="item-title">${esc(e.name)}</div><div class="small muted">${e.type === 'muendlich' ? 'mündlich' : 'schriftlich'}${e.date ? ' · ' + fmtDate(e.date) + (d != null && d >= 0 ? ` · noch ${d} Tage` : '') : ' · kein Termin'}</div></div>
-      ${e.status === 'aktiv' ? `<span class="pill ${cls}">${{ gut: 'Zeit reicht', knapp: 'knapp', eng: 'priorisiert', offen: 'offen', vorbei: 'vorbei' }[plan.status]}</span>` : `<span class="pill">${{ bestanden: 'bestanden ✓', nicht_bestanden: 'nicht bestanden', archiviert: 'pausiert' }[e.status]}</span>`}</div>
+      ${e.status === 'aktiv' ? `<span class="pill ${cls}">${{ gut: 'Zeit reicht', knapp: 'knapp', eng: 'priorisiert', offen: 'offen', vorbei: 'vorbei' }[plan.status]}</span>` : `<span class="pill ${e.status === 'bestanden' ? 'green' : ''}">${{ bestanden: 'bestanden ✓', nicht_bestanden: 'nicht bestanden', archiviert: 'pausiert' }[e.status]}</span>`}</div>
+      ${(e.attempts || []).length > 1 ? `<div class="tiny muted" style="margin-top:4px">${e.attempts.map((a, j) => `${j === 0 ? 'Haupttermin' : j + '. Ersatztermin'}: ${a.date ? fmtDate(a.date) : 'offen'}${a.result === 'bestanden' ? ' ✓' : a.result === 'nicht_bestanden' ? ' ✗' : ''}`).join(' · ')}</div>` : ''}
+      ${e.status === 'aktiv' && plan.status === 'vorbei' && currentAttempt(e) ? `<div class="notice gold"><strong>Wie ist die Prüfung am ${fmtDate(e.date)} gelaufen?</strong><div class="row" style="margin-top:8px"><button class="btn small" data-res="bestanden" data-ex="${e.id}">Bestanden 🎉</button><button class="btn secondary small" data-res="nicht_bestanden" data-ex="${e.id}">Nicht bestanden</button></div></div>` : ''}
+      ${e.status === 'nicht_bestanden' ? `<div class="notice"><div class="small">Kein weiterer Termin eingetragen.</div><a class="btn small" style="margin-top:6px" href="#/fach/${sub.id}/bearbeiten">+ Ersatztermin eintragen</a></div>` : ''}
       ${e.status === 'aktiv' ? `<p class="small">${esc(plan.message)}</p>
       ${e.assessment ? '' : `<div class="notice small">Tipp: Mach zuerst den <strong>Einstufungstest</strong>. Dann weiß die App, was du schon kannst, und plant realistisch.</div>`}
       ${plan.today.length ? `<h4>Heute sinnvoll</h4><ul class="list">${plan.today.map(t => `<li><a class="item" href="#/fach/${sub.id}/kapitel/${t.id}"><span class="dot ${ampel(t.mastery, t.assessed)}"></span><div><div>${esc(t.title)}</div><div class="small muted">${esc(t.action)} · ca. ${fmtMin(t.min)}</div></div><span class="chev">›</span></a></li>`).join('')}</ul>` : ''}
@@ -64,6 +67,16 @@ function tabPlan(el, sub) {
   if (!exams.length) html += `<div class="card muted">Keine Prüfungen eingetragen. <a href="#/fach/${sub.id}/bearbeiten">Prüfungen anlegen</a></div>`;
   html += `<div class="row"><a class="btn secondary small" href="#/fach/${sub.id}/bearbeiten">Fach, Prüfungen & Ordner bearbeiten</a></div>`;
   el.innerHTML = html;
+  el.querySelectorAll('[data-res]').forEach(b => b.onclick = () => {
+    store.update(s => {
+      const ex = s.subjects.find(x => x.id === sub.id).exams.find(x => x.id === b.dataset.ex);
+      const att = currentAttempt(ex); if (att) att.result = b.dataset.res;
+      syncExam(ex);
+    });
+    if (b.dataset.res === 'bestanden') toast('Gratuliere! 🎉');
+    else toast(currentAttempt(store.subject(sub.id).exams.find(x => x.id === b.dataset.ex)) ? 'Der Plan rechnet jetzt mit dem Ersatztermin. Dein Lernstand bleibt erhalten.' : 'Trag einen Ersatztermin ein, dann plant die App weiter.', 5000);
+    render();
+  });
 }
 
 // ---------- Lehrbuch / Stoffgebiete ----------

@@ -61,7 +61,7 @@ export function computePlan(sub, exam) {
   let status, message;
   const cover = inScope.length ? Math.round(100 * inScope.filter(c => c.plan === 'voll').reduce((a, c) => a + c.remaining, 0) / Math.max(1, need)) : 100;
   if (!exam.date) { status = 'offen'; message = 'Kein Prüfungstermin eingetragen – trag einen Termin ein, dann rechne ich mit deiner tatsächlichen Zeit.'; }
-  else if (avail.days <= 0) { status = 'vorbei'; message = 'Der Prüfungstermin ist erreicht.'; }
+  else if (avail.days <= 0) { status = 'vorbei'; message = 'Der Prüfungstermin ist vorbei. Trag ein, wie es gelaufen ist – bei Bedarf rechnet der Plan dann mit dem Ersatztermin weiter.'; }
   else if (!inScope.length) { status = 'offen'; message = 'Noch keine Kapitel – verarbeite zuerst die Lehrbücher.'; }
   else if (ratio <= 0.85) { status = 'gut'; message = `Die Zeit reicht gut für den gesamten Stoff. Es bleibt Luft für Falltraining und Wiederholung.`; }
   else if (ratio <= 1.05) { status = 'knapp'; message = `Die Zeit reicht, ist aber knapp. Bleib bei den „muss sitzen“-Kapiteln dran.`; }

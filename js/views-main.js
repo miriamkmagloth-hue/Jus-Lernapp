@@ -1,5 +1,5 @@
 // Hauptansichten: Übersicht, Fächer, Fach anlegen, Statistik, Fehlerbuch, Einstellungen, Einrichtung
-import { store, local, uid, newExam, normalizeSubject, allChapters } from './store.js';
+import { store, local, uid, newExam, normalizeSubject, allChapters, syncExam } from './store.js';
 import { signIn, signOut, isSignedIn, syncOnStart } from './drive.js';
 import { esc, md, toast, pickFolders, confirmDialog, fmtDate, daysUntil, fmtMin, barChart, ampel } from './ui.js';
 import { setTitle, render, autoUpdate } from './app.js';
@@ -98,23 +98,30 @@ export function subjectEditor(el, subId) {
   const existing = subId ? store.subject(subId) : null;
   setTitle(existing ? 'Fach bearbeiten' : 'Neues Fach');
   const draft = existing ? JSON.parse(JSON.stringify(existing)) : normalizeSubject({ id: uid('f_'), name: '' });
-  if (!existing && !draft.exams.length) draft.exams.push(newExam({ name: 'Schriftliche Abschlussklausur 1', type: 'schriftlich' }));
+  if (!existing && !draft.exams.length) draft.exams.push(newExam({ name: 'Schriftliche Abschlussklausur', type: 'schriftlich' }));
 
   const draw = () => {
     el.innerHTML = `<div data-no-rerender>
     <div class="card"><label class="field"><span>Name des Fachs</span><input type="text" id="fname" value="${esc(draft.name)}" placeholder="z. B. Bürgerliches Recht"></label></div>
 
     <div class="card"><h3>Prüfungen in diesem Fach</h3>
-      <p class="small muted">Leg alle Prüfungen an, für die du lernst – z. B. Klausur 1, Klausur 2 (falls nötig), mündliche Prüfung. Jede bekommt ihren eigenen Plan.</p>
+      <p class="small muted">Leg jede Prüfung einmal an – z. B. die schriftliche Klausur und die mündliche Prüfung. Ersatztermine bei Nichtbestehen trägst du direkt bei der jeweiligen Prüfung ein; der Lernstand bleibt erhalten.</p>
       ${draft.exams.map((e, i) => `
         <div class="card" style="background:var(--bg)" data-exam="${i}">
           <div class="grid2">
             <label class="field"><span>Bezeichnung</span><input type="text" data-f="name" value="${esc(e.name)}"></label>
             <label class="field"><span>Art</span><select data-f="type"><option value="schriftlich" ${e.type === 'schriftlich' ? 'selected' : ''}>schriftlich (Klausur)</option><option value="muendlich" ${e.type === 'muendlich' ? 'selected' : ''}>mündlich</option></select></label>
-            <label class="field"><span>Termin</span><input type="date" data-f="date" value="${esc(e.date)}"></label>
             <label class="field"><span>Lernzeit pro Lerntag (Stunden)</span><input type="number" min="0.5" max="14" step="0.5" data-f="hoursPerDay" value="${e.hoursPerDay}"></label>
-            <label class="field"><span>Status</span><select data-f="status">${[['aktiv', 'ich lerne dafür'], ['bestanden', 'bestanden'], ['nicht_bestanden', 'nicht bestanden'], ['archiviert', 'pausiert / später']].map(([v, l]) => `<option value="${v}" ${e.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+            <label class="field"><span>Status</span><select data-f="status">${[['aktiv', 'ich lerne dafür'], ['archiviert', 'pausiert / später']].map(([v, l]) => `<option value="${v}" ${(e.status === 'archiviert' ? 'archiviert' : 'aktiv') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
           </div>
+          <div class="small muted">Termine (Haupttermin und Ersatztermine bei Nichtbestehen)</div>
+          ${(e.attempts || []).map((a, j) => `<div data-att="${j}" style="margin:8px 0">
+            <div class="small" style="margin-bottom:4px">${j === 0 ? 'Haupttermin' : j + '. Ersatztermin'}</div>
+            <div style="display:grid;grid-template-columns:minmax(140px,1fr) minmax(120px,auto) auto;gap:8px;align-items:center">
+            <input type="date" data-af="date" value="${esc(a.date)}">
+            <select data-af="result">${[['offen', 'offen'], ['bestanden', 'bestanden ✓'], ['nicht_bestanden', 'nicht bestanden']].map(([v, l]) => `<option value="${v}" ${a.result === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+            ${j > 0 ? '<button class="btn ghost small" data-a="delAtt" title="Termin entfernen">✕</button>' : '<span></span>'}</div></div>`).join('')}
+          <button class="btn secondary small" data-a="addAtt">+ Ersatztermin</button>
           <div class="small muted">Lerntage</div>
           <div class="row">${WEEKDAYS.map(([d, l]) => `<label class="checkline"><input type="checkbox" data-day="${d}" ${e.studyDays.includes(d) ? 'checked' : ''}>${l}</label>`).join('')}</div>
           <div class="row" style="justify-content:flex-end"><button class="btn danger small" data-a="delExam">Entfernen</button></div>
@@ -142,13 +149,20 @@ export function subjectEditor(el, subId) {
       const e = draft.exams[+box.dataset.exam];
       box.querySelectorAll('[data-f]').forEach(inp => { e[inp.dataset.f] = inp.type === 'number' ? Number(inp.value) : inp.value; });
       e.studyDays = [...box.querySelectorAll('[data-day]')].filter(c => c.checked).map(c => +c.dataset.day);
+      box.querySelectorAll('[data-att]').forEach(row => {
+        const a = e.attempts[+row.dataset.att];
+        a.date = row.querySelector('[data-af=date]').value;
+        a.result = row.querySelector('[data-af=result]').value;
+      });
     });
   };
 
   el.onclick = async e => {
     const btn = e.target.closest('[data-a]'); if (!btn) return;
     const a = btn.dataset.a;
-    if (a === 'addExam') { collect(); const t = btn.dataset.type; const n = draft.exams.filter(x => x.type === t).length + 1; draft.exams.push(newExam({ type: t, name: t === 'muendlich' ? 'Mündliche Prüfung' : `Schriftliche Abschlussklausur ${n}` })); draw(); }
+    if (a === 'addExam') { collect(); const t = btn.dataset.type; draft.exams.push(newExam({ type: t, name: t === 'muendlich' ? 'Mündliche Prüfung' : 'Schriftliche Abschlussklausur' })); draw(); }
+    if (a === 'addAtt') { collect(); const e = draft.exams[+btn.closest('[data-exam]').dataset.exam]; e.attempts.push({ date: '', result: 'offen' }); draw(); }
+    if (a === 'delAtt') { collect(); const e = draft.exams[+btn.closest('[data-exam]').dataset.exam]; e.attempts.splice(+btn.closest('[data-att]').dataset.att, 1); draw(); }
     if (a === 'delExam') { collect(); draft.exams.splice(+btn.closest('[data-exam]').dataset.exam, 1); draw(); }
     if (a === 'login') { collect(); try { await signIn(true); await syncOnStart(); draw(); } catch (err) { toast(err.message, 5000); } }
     if (a === 'pick') {
@@ -166,6 +180,7 @@ export function subjectEditor(el, subId) {
     if (a === 'save') {
       collect();
       if (!draft.name) { toast('Bitte einen Namen eingeben'); return; }
+      draft.exams.forEach(e => { e.attempts = e.attempts.filter((x, i) => i === 0 || x.date); syncExam(e); });
       store.update(s => {
         const i = s.subjects.findIndex(x => x.id === draft.id);
         if (i >= 0) s.subjects[i] = draft; else s.subjects.push(draft);
