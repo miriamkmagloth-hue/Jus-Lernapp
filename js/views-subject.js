@@ -112,11 +112,11 @@ function tabStoff(el, sub) {
     if (role === 'faelle') {
       const nCases = b.chapters.reduce((a, c) => a + (c.cases?.length || 0), 0);
       const doneF = b.chapters.filter(c => c.cases).length;
-      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)}</div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}${b.status === 'fertig' || (job && !job.done) ? '' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
+      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}${b.status === 'fertig' || (job && !job.done) ? '' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
         ${nCases ? `<a class="btn secondary small" href="#/fach/${sub.id}/falltraining" style="margin-top:8px">Fälle ansehen und lösen</a>` : ''}</div>`;
     }
-    if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)}</div><div class="small muted">${role === 'aus' ? 'wird nicht verwendet' : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
-    return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)}</div><div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
+    if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? 'wird nicht verwendet' : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
+    return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div>${b.authors?.length ? `<div class="small">${esc(b.authors.join(' / '))}${b.edition ? ' · ' + esc(b.edition) : ''}</div>` : ''}<div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
       <div class="row">${roleSel}${b.status === 'fertig' ? '' : job && !job.done ? '<span class="spinner"></span>' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut versuchen' : b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
       ${b.error ? `<div class="notice err small">${esc(b.error)}</div>` : ''}
       <ul class="list">${b.chapters.map(c => {
@@ -127,6 +127,20 @@ function tabStoff(el, sub) {
           <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div></div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
+  el.querySelectorAll('[data-rename]').forEach(btn => btn.onclick = e => {
+    e.preventDefault();
+    const b = sub.books.find(x => x.fileId === btn.dataset.rename);
+    openModal(`<h3 style="margin-top:0">Buch umbenennen</h3><label class="field"><span>Titel</span><input type="text" id="bt" value="${esc(b.title)}"></label>
+      <div class="tiny muted" style="margin-bottom:10px">Datei: ${esc(b.fileTitle || b.title)}</div>
+      <div class="row" style="justify-content:flex-end"><button class="btn secondary" data-m="c">Abbrechen</button><button class="btn" data-m="ok">Speichern</button></div>`, m => {
+      m.querySelector('[data-m=c]').onclick = closeModal;
+      m.querySelector('[data-m=ok]').onclick = () => {
+        const v = m.querySelector('#bt').value.trim(); if (!v) return;
+        store.update(s => { const x = s.subjects.find(y => y.id === sub.id).books.find(y => y.fileId === b.fileId); if (!x.role) x.role = bookRole(x); x.fileTitle = x.fileTitle || x.title; x.title = v; x.titleManual = true; x.titleDetected = true; });
+        closeModal(); render();
+      };
+    });
+  });
   el.querySelectorAll('[data-role]').forEach(sel => sel.onchange = () => {
     const fid = sel.dataset.role, role = sel.value;
     store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); const before = bookRole(b); b.role = role;

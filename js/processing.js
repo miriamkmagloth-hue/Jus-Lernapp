@@ -154,6 +154,7 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
     const textChars = t.pages.reduce((a, p) => a + p.text.length, 0);
     if (textChars < t.pages.length * 50) throw new Error('Das PDF enthält kaum lesbaren Text (eingescannt?). Bitte eine PDF-Version mit Text verwenden oder vorher Texterkennung (OCR) laufen lassen.');
 
+    try { await detectBookTitle(subId, fileId); } catch (e) { console.warn('Titel nicht erkannt', e); }
     let book = store.subject(subId).books.find(b => b.fileId === fileId);
     if (!book.chapters?.length) {
       onStatus('Erkenne Kapitel …');
@@ -307,6 +308,32 @@ export async function extractCases(subId, fileId, chId, pagesOpt) {
   const cases = (r.faelle || []).filter(f => f && (f.sachverhalt || f.loesung));
   patchCases(subId, fileId, chId, cases);
   return cases;
+}
+
+// Den echten Buchtitel aus den ersten Seiten lesen (statt Dateiname)
+export async function detectBookTitle(subId, fileId) {
+  const sub = store.subject(subId);
+  const b = sub.books.find(x => x.fileId === fileId);
+  if (!b || b.titleDetected) return;
+  const t = await getFileText(sub, fileId);
+  const head = t.pages ? t.pages.slice(0, 8).map(p => `[Seite ${p.n}]\n${p.text}`).join('\n\n') : (t.text || '').slice(0, 12000);
+  const r = await completeJson({
+    model: 'fast', maxTokens: 600,
+    system: 'Du liest Titelangaben aus den ersten Seiten eines Buchs.',
+    messages: [{ role: 'user', content: `Wie heißt dieses Buch laut Titelseite? Gib den Titel so an, wie man das Buch nennt (inkl. Band, z. B. „Bürgerliches Recht II“), ohne Verlag.\nJSON: {"titel":"…","autoren":["Nachname", …],"auflage":"z. B. 16. Auflage oder leer"}\n\n${clip(head, 15000)}` }]
+  });
+  const titel = String(r.titel || '').trim();
+  if (!titel || titel.length > 140) return;
+  store.update(s => {
+    const x = s.subjects.find(y => y.id === subId).books.find(y => y.fileId === fileId);
+    if (!x || x.titleDetected) return;
+    if (!x.role) x.role = bookRole(x); // Buchart beibehalten, auch wenn sich der Titel ändert
+    x.fileTitle = x.fileTitle || x.title;
+    x.title = titel;
+    x.authors = (r.autoren || []).filter(Boolean).slice(0, 5);
+    x.edition = r.auflage || '';
+    x.titleDetected = true;
+  });
 }
 
 function chapterListForPrompt(sub, withSummary = false) {

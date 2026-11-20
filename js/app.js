@@ -5,7 +5,7 @@ import { signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, c
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
 import { applyTheme } from './theme.js';
-import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings, shareAllTexts } from './processing.js';
+import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings, shareAllTexts, detectBookTitle } from './processing.js';
 import * as main from './views-main.js';
 import * as subj from './views-subject.js';
 import * as learn from './views-learn.js';
@@ -161,6 +161,8 @@ export function queueProcessing(id) {
     return r === 'faelle' ? b.chapters.some(c => !c.cases) : b.status !== 'fertig';
   };
   const books = sub.books.filter(needsWork).sort((a, b) => rank(a) - rank(b));
+  // Bücher, die schon verarbeitet sind: echten Titel nachträglich erkennen
+  for (const b of sub.books) if (!b.titleDetected && !b.titleManual && bookRole(b) !== 'aus' && !books.includes(b)) runJob('title:' + b.fileId, `Buchtitel von „${b.title}“ erkennen`, () => detectBookTitle(id, b.fileId), { subId: id });
   for (const b of books) runJob('book:' + b.fileId, `${{ nachschlag: 'Nachschlagewerk', faelle: 'Fallsammlung' }[bookRole(b)] || 'Lehrbuch'} „${b.title}“ ${bookRole(b) === 'nachschlag' ? 'einlesen' : 'verarbeiten'}`, st => processBook(id, b.fileId, st), { subId: id });
   for (const u of sub.units) if (!u.analysis && u.status !== 'fehler') runJob('unit:' + u.fileId, `Einheit „${u.title}“ analysieren`, st => analyzeUnit(id, u.fileId, st), { subId: id });
   for (const k of sub.altklausuren) if (!k.analysis && k.status !== 'fehler') runJob('alt:' + k.fileId, `Altklausur „${k.title}“ analysieren`, st => analyzeAltklausur(id, k.fileId, st), { subId: id });

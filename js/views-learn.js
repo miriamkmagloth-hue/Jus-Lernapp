@@ -39,14 +39,11 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
       let material = '';
       for (const id of chapterIds.slice(0, 4)) material += `\n\n# Kapitel ${findChapter(sub, id)?.chapter.title} [ID ${id}]\n` + clip(await chapterText(sub, id), chapterIds.length > 1 ? 80000 : 250000);
       const r = await completeJson({
-        model: 'smart', maxTokens: 6000,
+        model: 'smart', maxTokens: 8000,
         system: 'Du erstellst Multiple-Choice-Prüfungsfragen ausschließlich aus dem gegebenen Lehrbuchtext.',
         messages: [{ role: 'user', content: `Erstelle ${count} Multiple-Choice-Fragen: ${LEVEL_PROMPT[level] || LEVEL_PROMPT.gemischt}. Kennzeichne jede Frage mit "ebene". Je 4 Antwortoptionen, genau eine richtig. Falsche Optionen sollen plausibel sein (typische Verwechslungen). Mische Wissens-, Verständnis- und Anwendungsfragen (Mini-Fälle).\nJSON: {"fragen":[{"frage":"…","optionen":["…","…","…","…"],"richtig":Index 0-3,"erklaerung":"warum richtig, warum die anderen falsch","seite":"S. …","kapitelId":"…","ebene":"basis|vertiefung"}]}\n\nLEHRBUCHTEXT:${material}` }]
       });
-      const qs = (r.fragen || []).filter(q => q.optionen?.length >= 2).map(q => {
-        const opts = q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }));
-        return { ...q, opts: shuffle(opts) };
-      });
+      const qs = normalizeQuestions(r, chapterIds.map(id => ({ id, title: findChapter(sub, id)?.chapter.title || '' })), { basis: count, vert: 0 });
       if (!qs.length) throw new Error('Keine Fragen erhalten – bitte nochmal versuchen.');
       run(qs);
     } catch (e) { el.innerHTML = errorBox(e) + '<button class="btn secondary small" data-a="retry">Nochmal</button>'; el.querySelector('[data-a=retry]').onclick = start; }
@@ -484,7 +481,27 @@ async function makeQuestions(sub, chapters, per) {
     system: 'Du erstellst präzise Diagnosefragen, um den Kenntnisstand pro Kapitel zuverlässig einzuschätzen. Grundlage ist ausschließlich der Lehrbuchtext.',
     messages: [{ role: 'user', content: `Erstelle für JEDES Kapitel unten Multiple-Choice-Fragen mit je 4 Optionen: ${per.basis} Fragen zum BASISWISSEN (davon mind. eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und ${per.vert} Frage(n) zur VERTIEFUNG.\n${PRECISION}\nJSON: {"fragen":[{"kapitelId":"…","frage":"…","optionen":["…","…","…","…"],"richtig":0-3,"erklaerung":"…","seite":"S. …","ebene":"basis|vertiefung"}]}\n${material}` }]
   });
-  return (r.fragen || []).filter(q => q.optionen?.length >= 2 && chapters.some(c => c.id === q.kapitelId)).map(q => ({ ...q, opts: shuffle(q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }))) }));
+  return normalizeQuestions(r, chapters, per);
+}
+
+// KI-Antworten robust auswerten: verschiedene Feldnamen, Kapitelzuordnung notfalls über Titel oder Reihenfolge
+export function normalizeQuestions(r, chapters, per = { basis: 4, vert: 2 }) {
+  const raw = Array.isArray(r) ? r : (r.fragen || r.questions || r.items || Object.values(r).find(Array.isArray) || []);
+  const norm = x => String(x || '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, '');
+  const perCh = (per.basis || 0) + (per.vert || 0) || 6;
+  const out = [];
+  raw.forEach((q, idx) => {
+    const optionen = q.optionen || q.antworten || q.options || q.answers;
+    if (!Array.isArray(optionen) || optionen.length < 2) return;
+    let richtig = q.richtig ?? q.correct ?? q.loesung ?? q.answer;
+    if (typeof richtig === 'string') { const n = parseInt(richtig, 10); richtig = !isNaN(n) ? n : optionen.findIndex(o => norm(o) === norm(richtig)); if (richtig < 0) richtig = 'ABCD'.indexOf(String(q.richtig).trim().toUpperCase()[0]); }
+    if (typeof richtig !== 'number' || richtig < 0 || richtig >= optionen.length) return;
+    let id = String(q.kapitelId || q.kapitel || q.chapterId || '').replace(/^ID\s*/i, '').trim();
+    let ch = chapters.find(c => c.id === id) || chapters.find(c => id && (id.includes(c.id) || c.id.includes(id))) || chapters.find(c => id && norm(c.title) === norm(id));
+    if (!ch) ch = chapters.length === 1 ? chapters[0] : chapters[Math.min(chapters.length - 1, Math.floor(idx / perCh))];
+    out.push({ ...q, frage: q.frage || q.question || q.text, optionen, richtig, kapitelId: ch.id, erklaerung: q.erklaerung || q.explanation || '', opts: shuffle(optionen.map((o, i) => ({ text: o, ok: i === richtig }))) });
+  });
+  return out.filter(q => q.frage);
 }
 
 export function assessmentView(el, subId, examId, onlyChapter) {
@@ -590,9 +607,15 @@ export function assessmentView(el, subId, examId, onlyChapter) {
       el.innerHTML = busy(`Erstelle Fragen aus dem Lehrbuchtext (Block ${b + 1} von ${batches.length}) …`);
       const score = {};
       try {
-        const qs = await prepare(b);
+        let qs = await prepare(b);
+        if (!qs.length) {
+          // zweiter Versuch: jedes Kapitel einzeln (kürzere, sicherere Anfragen)
+          el.innerHTML = busy('Erstelle die Fragen nochmal, diesmal Kapitel für Kapitel …');
+          qs = [];
+          for (const c of batch) { try { qs.push(...await makeQuestions(sub, [c], per)); } catch (e) { console.warn(e); } }
+        }
         prepare(b + 1);
-        if (!qs.length) throw new Error('Keine Fragen erhalten');
+        if (!qs.length) throw new Error('Die KI hat keine verwertbaren Fragen geliefert. Bitte nochmal versuchen – falls es wieder passiert, schick mir einen Screenshot.');
         await ask(qs, score, `Block ${b + 1}/${batches.length}`);
         // Unklare Kapitel: gezielte Nachfragen
         const unclear = batch.filter(c => { const sc = score[c.id]; if (!sc || !sc.basis[1]) return false; const f = sc.basis[0] / sc.basis[1]; return f > 0.2 && f < 0.85; });
