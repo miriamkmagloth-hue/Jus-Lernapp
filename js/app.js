@@ -1,7 +1,7 @@
 // Einstieg: Start, Navigation, automatische Synchronisierung
 import { store, local, bookRole, bookInExam } from './store.js';
 import { openLaw } from './law.js';
-import { signIn, syncOnStart, onSync, isSignedIn } from './drive.js';
+import { signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, canStaySignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
 import { applyTheme } from './theme.js';
@@ -77,7 +77,15 @@ $('#backBtn').onclick = () => history.length > 1 ? history.back() : (location.ha
 
 onSync(s => {
   const el = $('#syncState');
-  el.textContent = { offline: '○ nicht verbunden', 'lädt': '⟳ lädt', speichert: '⟳ speichert', synchron: '✓ synchron', Fehler: '⚠ Sync-Fehler' }[s] || s;
+  el.textContent = { offline: '○ nicht verbunden', 'lädt': '⟳ lädt', speichert: '⟳ speichert', synchron: '✓ synchron', Fehler: '⚠ Sync-Fehler', anmelden: '↻ Google: anmelden' }[s] || s;
+  el.style.cursor = s === 'anmelden' ? 'pointer' : '';
+  el.classList.toggle('pill', s === 'anmelden');
+});
+// Ein Tipp auf „anmelden“ erneuert die Verbindung (Klick nötig, sonst blockiert der Browser das Google-Fenster)
+$('#syncState').addEventListener('click', async () => {
+  if ($('#syncState').textContent.includes('anmelden')) {
+    try { await signIn(); await syncOnStart(); softRender(); autoUpdate(); } catch (e) { toast(e.message, 5000); }
+  }
 });
 
 // Wenn Hintergrundaufgaben fertig werden, Ansicht auffrischen
@@ -167,16 +175,9 @@ async function start() {
   store.on(st => { const d = JSON.stringify(st.settings.design || {}); if (d !== lastDesign) { lastDesign = d; applyTheme(); } });
   render();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
-  if (local.googleClientId && local.loggedInHint) {
-    try {
-      await signIn(false);
-      await syncOnStart();
-      softRender();
-      autoUpdate();
-    } catch (e) {
-      console.warn('Stille Anmeldung nicht möglich', e);
-      const el = $('#syncState'); el.textContent = '○ anmelden'; el.style.cursor = 'pointer';
-      el.onclick = async () => { try { await signIn(true); await syncOnStart(); softRender(); autoUpdate(); } catch (err) { toast(err.message); } };
+  if (local.loggedInHint || canStaySignedIn()) {
+    if (await signInSilently()) {
+      try { await syncOnStart(); softRender(); autoUpdate(); } catch (e) { console.warn(e); }
     }
   }
   // alle 30 Minuten nach neuen Dateien schauen, solange die App offen ist

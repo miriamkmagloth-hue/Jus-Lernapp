@@ -91,7 +91,7 @@ function bind(el) {
   el.querySelectorAll('[data-quick]').forEach(b => b.onclick = () => quickOff(b.dataset.quick));
   el.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { removeEntry(b.dataset.undo); render(); });
   el.querySelector('[data-a=login]')?.addEventListener('click', async () => {
-    try { await signIn(true); await syncOnStart(); render(); autoUpdate(); } catch (e) { toast(e.message, 5000); }
+    try { await signIn(); await syncOnStart(); render(); autoUpdate(); } catch (e) { toast(e.message, 5000); }
   });
 }
 
@@ -174,7 +174,7 @@ export function subjectEditor(el, subId) {
     if (a === 'addAtt') { collect(); const e = draft.exams[+btn.closest('[data-exam]').dataset.exam]; e.attempts.push({ date: '', result: 'offen' }); draw(); }
     if (a === 'delAtt') { collect(); const e = draft.exams[+btn.closest('[data-exam]').dataset.exam]; e.attempts.splice(+btn.closest('[data-att]').dataset.att, 1); draw(); }
     if (a === 'delExam') { collect(); draft.exams.splice(+btn.closest('[data-exam]').dataset.exam, 1); draw(); }
-    if (a === 'login') { collect(); try { await signIn(true); await syncOnStart(); draw(); } catch (err) { toast(err.message, 5000); } }
+    if (a === 'login') { collect(); try { await signIn(); await syncOnStart(); draw(); } catch (err) { toast(err.message, 5000); } }
     if (a === 'pick') {
       collect();
       const cat = btn.dataset.cat;
@@ -325,7 +325,7 @@ export function settingsView(el) {
   el.onclick = async e => {
     const a = e.target.closest('[data-a]')?.dataset.a; if (!a) return;
     if (a === 'save') { save(); toast('Gespeichert'); }
-    if (a === 'login') { save(); try { await signIn(true); await syncOnStart(); toast('Verbunden'); render(); autoUpdate(); } catch (err) { toast(err.message, 6000); } }
+    if (a === 'login') { save(); try { await signIn(); await syncOnStart(); toast('Verbunden'); render(); autoUpdate(); } catch (err) { toast(err.message, 6000); } }
     if (a === 'logout') { signOut(); render(); }
     if (a === 'scan') { save(); autoUpdate(); toast('Suche läuft im Hintergrund'); }
     if (a === 'testai') {
@@ -375,7 +375,7 @@ export function setupView(el) {
     local.googleClientId = el.querySelector('#cid').value.trim();
     const k = el.querySelector('#akey').value.trim();
     store.update(s => { if (k) { s.settings.keys.anthropic = k; s.settings.provider = 'anthropic'; } });
-    try { await signIn(true); await syncOnStart(); toast('Eingerichtet!'); location.hash = '#/'; autoUpdate(); }
+    try { await signIn(); await syncOnStart(); toast('Eingerichtet!'); location.hash = '#/'; autoUpdate(); }
     catch (e) { toast(e.message, 6000); }
   };
 }

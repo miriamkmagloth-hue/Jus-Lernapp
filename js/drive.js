@@ -24,12 +24,76 @@ function waitForGis() {
   });
 }
 
-export function isSignedIn() { return !!accessToken && Date.now() < tokenExpiry; }
+// ---------- Anmeldung ----------
+// 1) Mit Server (Vercel): einmal anmelden, danach erneuert die App den Zugang selbst (Refresh-Token)
+// 2) Ohne Server: Zugang gilt 1 Stunde; er wird auf dem Gerät gemerkt, damit ein Neustart keine neue Anmeldung braucht
+const TOK_KEY = 'gTok', RT_KEY = 'gRefresh';
+let serverAuth = null; // { enabled, clientId }
 
-export async function signIn(interactive = true) {
+function saveToken(tok, expiresIn) {
+  accessToken = tok;
+  tokenExpiry = Date.now() + (expiresIn - 120) * 1000;
+  try { localStorage.setItem(TOK_KEY, JSON.stringify({ t: tok, e: tokenExpiry })); } catch {}
+  local.loggedInHint = true;
+  needLogin(false);
+}
+(function restoreToken() {
+  try { const v = JSON.parse(localStorage.getItem(TOK_KEY) || 'null'); if (v && v.e > Date.now()) { accessToken = v.t; tokenExpiry = v.e; } } catch {}
+})();
+
+export function isSignedIn() { return !!accessToken && Date.now() < tokenExpiry; }
+export function canStaySignedIn() { return !!localStorage.getItem(RT_KEY); }
+
+const loginListeners = new Set();
+let loginNeeded = false;
+export function onNeedLogin(fn) { loginListeners.add(fn); fn(loginNeeded); }
+function needLogin(v) { if (loginNeeded !== v) { loginNeeded = v; loginListeners.forEach(f => f(v)); } if (v) setSync('anmelden'); }
+
+export async function serverAuthInfo() {
+  if (serverAuth) return serverAuth;
+  try {
+    const r = await fetch('/api/google-config', { cache: 'no-store' });
+    serverAuth = r.ok && (r.headers.get('content-type') || '').includes('json') ? await r.json() : { enabled: false };
+  } catch { serverAuth = { enabled: false }; }
+  if (serverAuth.clientId && !local.googleClientId) local.googleClientId = serverAuth.clientId;
+  return serverAuth;
+}
+
+async function refreshSilently() {
+  const rt = localStorage.getItem(RT_KEY);
+  if (!rt) return false;
+  try {
+    const r = await fetch('/api/google-refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ refresh_token: rt }) });
+    const j = await r.json();
+    if (!r.ok || !j.access_token) { if (j.error === 'invalid_grant') localStorage.removeItem(RT_KEY); return false; }
+    saveToken(j.access_token, j.expires_in || 3600);
+    return true;
+  } catch { return false; }
+}
+
+// Interaktive Anmeldung – nur aus einem Klick heraus aufrufen (sonst blockiert der Browser das Fenster)
+export async function signIn() {
+  const info = await serverAuthInfo();
   const clientId = local.googleClientId;
   if (!clientId) throw new Error('Bitte zuerst in den Einstellungen die Google-Client-ID eintragen.');
   await waitForGis();
+  if (info.enabled) {
+    // Code-Verfahren: Server tauscht den Code gegen Zugang + Refresh-Token
+    const code = await new Promise((resolve, reject) => {
+      const c = google.accounts.oauth2.initCodeClient({
+        client_id: clientId, scope: SCOPES, ux_mode: 'popup',
+        callback: resp => resp.error ? reject(new Error(resp.error_description || resp.error)) : resolve(resp.code),
+        error_callback: err => reject(new Error(err?.message || err?.type || 'Anmeldung abgebrochen'))
+      });
+      c.requestCode();
+    });
+    const r = await fetch('/api/google-token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
+    const j = await r.json();
+    if (!r.ok || !j.access_token) throw new Error('Google-Anmeldung fehlgeschlagen: ' + (j.error_description || j.error || r.status));
+    if (j.refresh_token) localStorage.setItem(RT_KEY, j.refresh_token);
+    saveToken(j.access_token, j.expires_in || 3600);
+    return accessToken;
+  }
   if (!tokenClient) {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
@@ -37,9 +101,7 @@ export async function signIn(interactive = true) {
       callback: resp => {
         const p = pendingToken; pendingToken = null;
         if (resp.error) { p?.reject(new Error(resp.error_description || resp.error)); return; }
-        accessToken = resp.access_token;
-        tokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
-        local.loggedInHint = true;
+        saveToken(resp.access_token, resp.expires_in);
         p?.resolve(accessToken);
       },
       error_callback: err => {
@@ -50,24 +112,42 @@ export async function signIn(interactive = true) {
   }
   return new Promise((resolve, reject) => {
     pendingToken = { resolve, reject };
-    tokenClient.requestAccessToken({ prompt: interactive ? '' : 'none' });
+    tokenClient.requestAccessToken({ prompt: '' });
   });
+}
+
+// Beim Start: ohne Fenster versuchen (gemerkter Zugang oder Refresh-Token)
+export async function signInSilently() {
+  if (isSignedIn()) return true;
+  await serverAuthInfo();
+  if (await refreshSilently()) return true;
+  if (local.loggedInHint) needLogin(true);
+  return false;
 }
 
 export function signOut() {
   if (accessToken && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(accessToken, () => {});
-  accessToken = null; tokenExpiry = 0; local.loggedInHint = false; setSync('offline');
+  accessToken = null; tokenExpiry = 0; local.loggedInHint = false;
+  try { localStorage.removeItem(TOK_KEY); localStorage.removeItem(RT_KEY); } catch {}
+  setSync('offline');
 }
 
 async function token() {
   if (isSignedIn()) return accessToken;
-  return signIn(true);
+  if (await refreshSilently()) return accessToken;
+  needLogin(true);
+  const e = new Error('Die Google-Verbindung ist abgelaufen. Bitte oben auf „anmelden“ tippen.');
+  e.needLogin = true;
+  throw e;
 }
+
+// Zugang rechtzeitig vor Ablauf still erneuern (nur mit Server möglich)
+setInterval(() => { if (accessToken && tokenExpiry - Date.now() < 5 * 60 * 1000) refreshSilently(); }, 60 * 1000);
 
 async function gfetch(url, opts = {}, retry = true) {
   const t = await token();
   const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t } });
-  if (res.status === 401 && retry) { accessToken = null; return gfetch(url, opts, false); }
+  if (res.status === 401 && retry) { accessToken = null; tokenExpiry = 0; return gfetch(url, opts, false); }
   if (!res.ok) {
     let msg = res.status + ' ' + res.statusText;
     try { const j = await res.json(); msg = j.error?.message || msg; } catch {}
@@ -144,7 +224,7 @@ async function readRemoteState() {
 
 let saving = false, saveAgain = false;
 export async function writeRemoteState() {
-  if (!isSignedIn()) return;
+  if (!isSignedIn() && !canStaySignedIn()) return;
   if (saving) { saveAgain = true; return; }
   saving = true; setSync('speichert');
   try {
