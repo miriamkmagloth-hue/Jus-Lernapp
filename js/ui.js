@@ -13,7 +13,7 @@ export function esc(s) {
 export function enrich(htmlEscaped) {
   return htmlEscaped
     .replace(/(§§?\s*(\d+[a-z]?)(?:\s*(?:Abs\.?\s*\d+|Z\s*\d+|lit\.?\s*[a-z]|Satz\s*\d+|S\s*\d+|ff?\.?))*\s+(ABGB|B-VG|StGB|ZPO|UGB|KSchG|StPO|AVG|EO|IO|MRG|GmbHG|AktG|EheG|JN|ASVG|VStG|EKHG|AußStrG|WEG|ECG|FAGG|VKrG|PHG))/g,
-      (m, all, para, law) => `<a class="norm" href="${normLink(para, law)}" target="_blank" rel="noopener">${all}</a>`)
+      (m, all, para, law) => `<a class="norm" href="${normLink(para, law)}" data-para="${para}" data-law="${law}" target="_blank" rel="noopener">${all}</a>`)
     .replace(/\[(S\.?\s*[\w\d\-–, f.]+)\]/g, '<span class="cite">[$1]</span>');
 }
 

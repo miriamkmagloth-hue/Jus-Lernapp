@@ -1,5 +1,5 @@
 // Verarbeitung: Ordner scannen, Lehrbücher gliedern und zusammenfassen, Transkripte/Altklausuren/Urteile analysieren
-import { store, uid, textGet, textSet, allChapters, findChapter, isStudyChapter } from './store.js';
+import { store, uid, textGet, textSet, allChapters, findChapter, isStudyChapter, bookRole } from './store.js';
 import { listRecursive, downloadFile, getFileMeta } from './drive.js';
 import { fileToText, isSupported, pagesToText } from './extract.js';
 import { completeJson, clip } from './ai.js';
@@ -96,6 +96,17 @@ const SKIP_TITLES = { test: t => !isStudyChapter({ title: t }) || /^(cover|umsch
 
 export async function processBook(subId, fileId, onStatus = () => {}) {
   let sub = store.subject(subId);
+  const role0 = bookRole(sub.books.find(b => b.fileId === fileId) || {});
+  if (role0 === 'aus') { onStatus('übersprungen (nicht verwenden)'); return; }
+  if (role0 === 'nachschlag') {
+    // Nachschlagewerk (z. B. Gesetzestext): nur Text einlesen, nicht zusammenfassen – kostet nichts
+    patchBook(subId, fileId, b => { b.status = 'läuft'; b.error = null; });
+    try {
+      const t = await getFileText(sub, fileId, (i, n) => onStatus(`Lese Seite ${i} von ${n} …`));
+      patchBook(subId, fileId, b => { b.status = 'nachschlagbar'; b.numPages = t.pages?.length || b.numPages; });
+    } catch (e) { patchBook(subId, fileId, b => { b.status = 'fehler'; b.error = e.message; }); throw e; }
+    return;
+  }
   patchBook(subId, fileId, b => { b.status = 'läuft'; b.error = null; });
   try {
     onStatus('Lade und lese PDF …');
@@ -121,6 +132,9 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
     let i = 0;
     for (const ch of todo) {
       i++;
+      const cur = store.subject(subId).books.find(b => b.fileId === fileId);
+      if (!cur || bookRole(cur) !== 'stoff') { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
+      if (!isStudyChapter(ch)) continue;
       onStatus(`Fasse Kapitel ${i} von ${todo.length} zusammen: ${ch.title}`);
       await summarizeChapter(subId, fileId, ch.id, t.pages);
     }

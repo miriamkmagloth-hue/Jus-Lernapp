@@ -133,3 +133,20 @@ export function normLink(paragraph, law) {
   if (nr) return `https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(paragraph)}`;
   return `https://www.google.com/search?q=${encodeURIComponent('RIS § ' + paragraph + ' ' + law)}`;
 }
+
+// Gesetzestext eines Paragraphen aus dem RIS holen (geltende Fassung)
+export async function fetchNormText(law, para) {
+  const nr = GESETZESNR[law];
+  if (!nr) throw new Error('Für ' + law + ' ist keine RIS-Nummer hinterlegt.');
+  const html = await risFetch('doc', `NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(para)}`, true);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,nav,header,footer,noscript').forEach(n => n.remove());
+  const main = doc.querySelector('.document, .documentContent, #content, main') || doc.body;
+  let text = (main?.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
+  const start = text.search(new RegExp('§\\s*' + para.replace(/[a-z]$/, m => m) + '\\b'));
+  if (start > 0) text = text.slice(start);
+  const stop = text.search(/\n\s*(Schlagworte|Zuletzt aktualisiert am|Dokumentnummer|Im RIS seit|Gesetzesnummer)\b/);
+  if (stop > 50) text = text.slice(0, stop);
+  if (text.length < 20) throw new Error('Text nicht gefunden');
+  return text.slice(0, 12000);
+}

@@ -254,8 +254,8 @@ export function caseView(el, subId, preset) {
   setup();
 
   function setup() {
-    const chs = allChapters(sub).filter(c => c.summary);
     const exam = activeExams(sub).find(e => e.type === 'schriftlich') || activeExams(sub)[0];
+    const chs = allChapters(sub, { exam }).filter(c => c.summary);
     if (!chs.length) { el.innerHTML = '<div class="card">Zuerst müssen die Lehrbücher verarbeitet sein.</div>'; return; }
     const inScope = c => !exam?.scopeMap || exam.scopeMap[c.id] !== 'raus';
     el.innerHTML = `<div class="card"><h3>Neuen Fall erstellen</h3>
@@ -380,7 +380,7 @@ export function oralView(el, subId, examId) {
   const exam = sub.exams.find(e => e.id === examId);
   setTitle('Mündliche Simulation');
   noRerender(el);
-  const chs = allChapters(sub).filter(c => c.summary && (!exam?.scopeMap || exam.scopeMap[c.id] !== 'raus'));
+  const chs = allChapters(sub, { exam }).filter(c => c.summary && (!exam?.scopeMap || exam.scopeMap[c.id] !== 'raus'));
   if (!chs.length) { el.innerHTML = '<div class="card">Zuerst müssen die Lehrbücher verarbeitet sein.</div>'; return; }
   el.innerHTML = `<div class="card"><h3>${esc(sub.name)}${exam ? ' · ' + esc(exam.name) : ''}</h3>
     <label class="field"><span>Dauer</span><select id="dur"><option value="10">ca. 10 Minuten</option><option value="15" selected>ca. 15 Minuten</option><option value="25">ca. 25 Minuten</option></select></label>
@@ -442,7 +442,7 @@ export function assessmentView(el, subId, examId) {
   if (!exam) return;
   setTitle('Einstufung');
   noRerender(el);
-  const chs = allChapters(sub).filter(c => c.summary && (!exam.scopeMap || exam.scopeMap[c.id] !== 'raus'));
+  const chs = allChapters(sub, { exam }).filter(c => c.summary && (!exam.scopeMap || exam.scopeMap[c.id] !== 'raus'));
   const prog = store.state.progress.chapters;
   const todo = chs.filter(c => !prog[c.id]?.assessed);
   if (!chs.length) { el.innerHTML = '<div class="card">Zuerst müssen die Lehrbücher verarbeitet sein (Zusammenfassungen).</div>'; return; }

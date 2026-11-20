@@ -200,3 +200,4 @@ body.has-app-bg .chat-input { background: transparent; }
 .bg-thumb { width: 120px; height: 80px; border-radius: 12px; border: 1px solid var(--line); background-size: cover; flex: none; }
 input[type=range] { width: 100%; accent-color: var(--primary); }
 .color-field { margin-bottom: 12px; } .color-field > span { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }

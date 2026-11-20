@@ -1,5 +1,5 @@
 // Ansichten innerhalb eines Fachs
-import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter } from './store.js';
+import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL } from './planner.js';
@@ -101,11 +101,16 @@ function tabStoff(el, sub) {
   const prog = store.state.progress.chapters;
   if (!sub.books.length) { el.innerHTML = `<div class="card empty">Noch keine Lehrbücher. Wähle den Lehrbuch-Ordner unter <a href="#/fach/${sub.id}/bearbeiten">Fach bearbeiten</a>.</div>`; return; }
   const exam = activeExams(sub)[0];
-  el.innerHTML = sub.books.map(b => {
+  const roleOrder = { stoff: 0, nachschlag: 1, aus: 2 };
+  const books = [...sub.books].sort((a, b) => roleOrder[bookRole(a)] - roleOrder[bookRole(b)]);
+  el.innerHTML = `<div class="notice small">Leg pro Buch fest, wofür es da ist: <strong>Lernstoff</strong> wird zusammengefasst und abgefragt, <strong>Nachschlagewerk</strong> (z. B. Gesetzestext) wird nur eingelesen, damit du Paragraphen antippen kannst, <strong>Nicht verwenden</strong> wird ignoriert. Welche Bücher zu welcher Prüfung gehören, stellst du im Lernplan der Prüfung ein.</div>` + books.map(b => {
     const job = jobs.get('book:' + b.fileId);
+    const role = bookRole(b);
     const done = b.chapters.filter(c => c.summary).length;
-    return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)}</div><div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst</div></div>
-      ${b.status === 'fertig' ? '' : job && !job.done ? '<span class="spinner"></span>' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut versuchen' : 'Verarbeiten'}</button>`}</div>
+    const roleSel = `<select data-role="${b.fileId}" style="width:auto;min-height:34px;padding:4px 8px;font-size:.85rem"><option value="stoff" ${role === 'stoff' ? 'selected' : ''}>📘 Lernstoff</option><option value="nachschlag" ${role === 'nachschlag' ? 'selected' : ''}>📖 Nachschlagewerk</option><option value="aus" ${role === 'aus' ? 'selected' : ''}>⛔ Nicht verwenden</option></select>`;
+    if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)}</div><div class="small muted">${role === 'aus' ? 'wird nicht verwendet' : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
+    return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)}</div><div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
+      <div class="row">${roleSel}${b.status === 'fertig' ? '' : job && !job.done ? '<span class="spinner"></span>' : `<button class="btn small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut versuchen' : b.status === 'pausiert' ? 'Fortsetzen' : 'Verarbeiten'}</button>`}</div></div>
       ${b.error ? `<div class="notice err small">${esc(b.error)}</div>` : ''}
       <ul class="list">${b.chapters.map(c => {
         const p = prog[c.id];
@@ -115,8 +120,16 @@ function tabStoff(el, sub) {
           <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div></div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
+  el.querySelectorAll('[data-role]').forEach(sel => sel.onchange = () => {
+    const fid = sel.dataset.role, role = sel.value;
+    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); b.role = role; if (role === 'stoff' && ['nachschlagbar', 'pausiert'].includes(b.status)) b.status = b.chapters?.length ? 'gegliedert' : 'neu'; if (role === 'nachschlag' && b.status !== 'fertig') b.status = 'neu'; });
+    toast(role === 'aus' ? 'Wird nicht verwendet – eine laufende Verarbeitung stoppt nach dem aktuellen Kapitel.' : role === 'nachschlag' ? 'Nachschlagewerk – wird nur eingelesen, nicht zusammengefasst.' : 'Lernstoff – wird verarbeitet.', 5000);
+    queueProcessing(sub.id);
+    render();
+  });
   el.querySelectorAll('[data-proc]').forEach(btn => btn.onclick = () => {
     const fid = btn.dataset.proc;
+    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); if (b.status === 'pausiert') b.status = 'gegliedert'; });
     const b = sub.books.find(x => x.fileId === fid);
     runJob('book:' + fid, `Lehrbuch „${b.title}“ verarbeiten`, st => processBook(sub.id, fid, st), { subId: sub.id });
     render();
@@ -448,6 +461,11 @@ export function examView(el, subId, examId) {
       <p>Noch nicht zusammengefasste Kapitel werden grob nach Seitenzahl geschätzt – die Rechnung wird genauer, sobald alle Lehrbücher verarbeitet sind.</p></div></details>
     <div class="row" style="margin-top:8px"><a class="btn secondary small" href="#/kalender">📅 Lernkalender: freie Tage, Krankheit, Schließtage</a></div></div>
 
+  <div class="card"><h3>Bücher für diese Prüfung</h3>
+    <p class="small muted">Nur diese Bücher zählen für Lernplan, Einstufung und Tests dieser Prüfung. Die anderen bleiben für andere Prüfungen erhalten.</p>
+    ${sub.books.filter(b => bookRole(b) === 'stoff').map(b => `<label class="checkline small"><input type="checkbox" data-book="${b.fileId}" ${bookInExam(b, exam) ? 'checked' : ''}> ${esc(b.title)}</label>`).join('') || '<p class="small muted">Noch keine Lernstoff-Bücher.</p>'}
+  </div>
+
   <div class="card"><h3>Stoffeingrenzung</h3>
     ${exam.scopeMap ? `<div class="notice ok small">Eingrenzung ist den Kapiteln zugeordnet. Du kannst jede Zuordnung unten ändern.</div>${exam.scopeNotes ? md(exam.scopeNotes) : ''}` : '<p class="small muted">Ohne Eingrenzung gilt der gesamte Lehrbuchstoff.</p>'}
     ${scopeFiles.length ? `<div class="small">Dateien für diese Prüfung:</div>${scopeFiles.map(f => `<label class="checkline small"><input type="checkbox" data-scopefile="${f.id}" ${exam.scopeFileIds?.includes(f.id) ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')}` : ''}
@@ -459,6 +477,13 @@ export function examView(el, subId, examId) {
   <div class="row"><a class="btn" href="#/fach/${subId}/einstufung/${examId}">Einstufungstest</a><a class="btn secondary" href="#/fach/${subId}/bearbeiten">Termin & Lernzeit ändern</a></div>`;
 
   el.onchange = e => {
+    const bk = e.target.closest('[data-book]');
+    if (bk) {
+      const ids = [...el.querySelectorAll('[data-book]')].filter(c => c.checked).map(c => c.dataset.book);
+      store.update(s => { const ex = s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId); ex.bookIds = ids.length === el.querySelectorAll('[data-book]').length ? null : ids; });
+      queueProcessing(subId);
+      render(); return;
+    }
     const sel = e.target.closest('[data-prio]');
     if (sel) {
       store.update(s => { const ex = s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId); if (!ex.scopeMap) { ex.scopeMap = {}; allChapters(sub).forEach(c => ex.scopeMap[c.id] = 'wichtig'); } ex.scopeMap[sel.dataset.prio] = sel.value; });

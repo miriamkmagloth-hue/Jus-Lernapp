@@ -172,6 +172,7 @@ export function newExam(partial = {}) {
     scopeText: partial.scopeText || '',
     scopeFileIds: partial.scopeFileIds || [],
     scopeMap: partial.scopeMap || null, // { chapterId: 'muss'|'wichtig'|'optional'|'raus' }
+    bookIds: partial.bookIds || null, // null = alle Lernstoff-Bücher
     assessment: partial.assessment || null,
     notes: partial.notes || '',
     attempts: partial.attempts || null
@@ -187,10 +188,25 @@ export function isStudyChapter(c) {
   return !NO_STUDY.test(c.title || '');
 }
 
-// Alle Kapitel eines Fachs (über alle Lehrbücher) – standardmäßig nur echter Lernstoff
-export function allChapters(sub, { includeHidden = false } = {}) {
+// Rolle eines Buchs: 'stoff' (Lernstoff), 'nachschlag' (nur nachschlagen, z. B. Gesetzestext), 'aus' (nicht verwenden)
+const LOOKUP_TITLE = /gesetz(es)?text|kodex|textausgabe|gesetzessammlung/i;
+export function bookRole(b) {
+  if (b.role) return b.role;
+  return LOOKUP_TITLE.test(b.title || '') ? 'nachschlag' : 'stoff';
+}
+// Gehört ein Buch zu einer Prüfung? (exam.bookIds = null heißt: alle Lernstoff-Bücher)
+export function bookInExam(b, exam) {
+  if (bookRole(b) !== 'stoff') return false;
+  return !exam || !Array.isArray(exam.bookIds) || exam.bookIds.includes(b.fileId);
+}
+
+// Alle Kapitel eines Fachs – standardmäßig nur echter Lernstoff aus Lernstoff-Büchern (optional: nur einer Prüfung)
+export function allChapters(sub, { includeHidden = false, exam = null } = {}) {
   const out = [];
-  for (const b of sub.books || []) for (const c of b.chapters || []) if (includeHidden || isStudyChapter(c)) out.push({ ...c, bookId: b.fileId, bookTitle: b.title });
+  for (const b of sub.books || []) {
+    if (!includeHidden && !bookInExam(b, exam)) continue;
+    for (const c of b.chapters || []) if (includeHidden || isStudyChapter(c)) out.push({ ...c, bookId: b.fileId, bookTitle: b.title });
+  }
   return out;
 }
 export function findChapter(sub, chId) {

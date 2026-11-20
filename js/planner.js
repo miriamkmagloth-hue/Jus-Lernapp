@@ -25,7 +25,7 @@ function profFrequency(sub) {
 export function computePlan(sub, exam) {
   const prog = store.state.progress.chapters;
   const alt = altFrequency(sub), prof = profFrequency(sub);
-  const chapters = allChapters(sub).map(c => {
+  const chapters = allChapters(sub, { exam }).map(c => {
     const scope = exam.scopeMap ? (exam.scopeMap[c.id] || 'optional') : 'wichtig';
     const p = prog[c.id] || { mastery: 0, assessed: false };
     const base = c.summary?.lernzeitMinuten > 0 ? c.summary.lernzeitMinuten : (c.pages || 10) * 6;

@@ -1,5 +1,6 @@
 // Einstieg: Start, Navigation, automatische Synchronisierung
-import { store, local } from './store.js';
+import { store, local, bookRole, bookInExam } from './store.js';
+import { openLaw } from './law.js';
 import { signIn, syncOnStart, onSync, isSignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
@@ -63,6 +64,15 @@ export function softRender() {
 }
 
 window.addEventListener('hashchange', () => render());
+// Paragraphen antippen: Gesetzestext mit markierten Stichwörtern öffnen
+document.addEventListener('click', e => {
+  const a = e.target.closest('a.norm');
+  if (!a || !a.dataset.para) return;
+  e.preventDefault();
+  const ctx = (a.closest('li, p, details, .card') || a.parentElement)?.textContent || '';
+  const m = (location.hash || '').match(/^#\/fach\/([^/]+)/);
+  openLaw({ para: a.dataset.para, law: a.dataset.law, context: ctx, subId: m?.[1], href: a.href });
+});
 $('#backBtn').onclick = () => history.length > 1 ? history.back() : (location.hash = '#/');
 
 onSync(s => {
@@ -116,7 +126,11 @@ export async function autoUpdate({ subjects = null } = {}) {
 export function queueProcessing(id) {
   const sub = store.subject(id);
   if (!sub) return;
-  for (const b of sub.books) if (b.status !== 'fertig' && b.status !== 'fehler') runJob('book:' + b.fileId, `Lehrbuch „${b.title}“ verarbeiten`, st => processBook(id, b.fileId, st), { subId: id });
+  // Bücher der nächsten Prüfung zuerst, Nachschlagewerke (nur einlesen) zuletzt, „nicht verwenden“ gar nicht
+  const next = (sub.exams || []).filter(e => e.status === 'aktiv' && e.date).sort((a, b) => a.date.localeCompare(b.date))[0];
+  const rank = b => bookRole(b) === 'nachschlag' ? 2 : bookInExam(b, next) ? 0 : 1;
+  const books = sub.books.filter(b => bookRole(b) !== 'aus' && !['fertig', 'fehler', 'nachschlagbar', 'pausiert'].includes(b.status)).sort((a, b) => rank(a) - rank(b));
+  for (const b of books) runJob('book:' + b.fileId, `${bookRole(b) === 'nachschlag' ? 'Nachschlagewerk' : 'Lehrbuch'} „${b.title}“ ${bookRole(b) === 'nachschlag' ? 'einlesen' : 'verarbeiten'}`, st => processBook(id, b.fileId, st), { subId: id });
   for (const u of sub.units) if (!u.analysis && u.status !== 'fehler') runJob('unit:' + u.fileId, `Einheit „${u.title}“ analysieren`, st => analyzeUnit(id, u.fileId, st), { subId: id });
   for (const k of sub.altklausuren) if (!k.analysis && k.status !== 'fehler') runJob('alt:' + k.fileId, `Altklausur „${k.title}“ analysieren`, st => analyzeAltklausur(id, k.fileId, st), { subId: id });
   for (const r of sub.rulings) if (r.source === 'upload' && !r.summary && r.status !== 'fehler') runJob('rul:' + r.id, `Urteil „${r.title}“ aufbereiten`, () => summarizeRuling(id, r.id), { subId: id });
