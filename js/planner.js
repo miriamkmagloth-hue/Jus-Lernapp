@@ -22,53 +22,101 @@ function profFrequency(sub) {
   return m;
 }
 
+// Ziele: wie gut ein Kapitel sitzen soll (Basis / Vertiefung), je nach Wichtigkeit
+export const TARGETS = {
+  sehrgut: { label: 'Sehr gut', basis: { muss: 0.9, wichtig: 0.9, optional: 0.75 }, vert: { muss: 0.75, wichtig: 0.6, optional: 0.3 } },
+  faelle: { label: 'Fälle sicher lösen', basis: { muss: 0.85, wichtig: 0.8, optional: 0.5 }, vert: { muss: 0.4, wichtig: 0.2, optional: 0 } }
+};
+const BASIS_SHARE = 0.65; // Anteil des Lernaufwands, der aufs Basiswissen entfällt
+
+function collectionFrequency(sub) {
+  const m = {};
+  for (const b of sub.books || []) for (const c of b.chapters || []) for (const f of c.cases || []) for (const id of f.kapitelIds || []) m[id] = (m[id] || 0) + 1;
+  return m;
+}
+
+// Restaufwand bis zum Ziel (Minuten)
+function remainingFor(effort, levels, assessed, mastery, tB, tV) {
+  let b = levels?.basis, v = levels?.vertiefung;
+  if (b == null && assessed) b = mastery;     // alte Ergebnisse ohne Ebenen
+  if (v == null && assessed) v = mastery * 0.6;
+  b = b ?? 0; v = v ?? 0;
+  // „effort“ = Aufwand, um ein Kapitel vollständig zu beherrschen; man lernt bis zum jeweiligen Ziel
+  const partB = effort * BASIS_SHARE * Math.max(0, tB - b);
+  const partV = effort * (1 - BASIS_SHARE) * Math.max(0, tV - v);
+  return partB + partV;
+}
+
 export function computePlan(sub, exam) {
   const prog = store.state.progress.chapters;
-  const alt = altFrequency(sub), prof = profFrequency(sub);
+  const alt = altFrequency(sub), prof = profFrequency(sub), fs = collectionFrequency(sub);
   const chapters = allChapters(sub, { exam }).map(c => {
     const scope = exam.scopeMap ? (exam.scopeMap[c.id] || 'optional') : 'wichtig';
     const p = prog[c.id] || { mastery: 0, assessed: false };
     const base = c.summary?.lernzeitMinuten > 0 ? c.summary.lernzeitMinuten : (c.pages || 10) * 6;
     const effort = base * (exam.type === 'schriftlich' ? 1.25 : 1);
-    const remaining = p.assessed ? effort * Math.max(0.12, 1 - p.mastery) : effort;
-    const prio = PRIO_BASE[scope] + Math.min(1.5, (alt[c.id] || 0) * 0.5) + Math.min(1, (prof[c.id] || 0) * 0.3);
-    return { id: c.id, title: c.title, bookTitle: c.bookTitle, pages: c.pages, scope, prio, effort, remaining, mastery: p.mastery || 0, levels: p.levels || null, assessed: !!p.assessed, lastStudied: p.lastStudied || 0, altCount: alt[c.id] || 0, profCount: prof[c.id] || 0 };
+    const hasSchema = (c.summary?.schemata || []).length > 0;
+    const reasons = [];
+    if (exam.scopeMap) reasons.push('Eingrenzung: ' + PRIO_LABEL[scope]);
+    if (alt[c.id]) reasons.push(`${alt[c.id]}× in Altklausuren`);
+    if (fs[c.id]) reasons.push(`${fs[c.id]} Fälle in Fallsammlungen`);
+    if (prof[c.id]) reasons.push('in der LV betont');
+    if (hasSchema && exam.type === 'schriftlich') reasons.push('Prüfungsschema');
+    const prio = PRIO_BASE[scope] + Math.min(1.5, (alt[c.id] || 0) * 0.5) + Math.min(1, (prof[c.id] || 0) * 0.3)
+      + (exam.type === 'schriftlich' ? Math.min(1, (fs[c.id] || 0) * 0.15) + (hasSchema ? 0.3 : 0) : 0);
+    const sc = scope === 'raus' ? 'optional' : scope;
+    const tg = k => ({ basis: TARGETS[k].basis[sc], vert: TARGETS[k].vert[sc] });
+    const remSG = scope === 'raus' ? 0 : remainingFor(effort, p.levels, p.assessed, p.mastery || 0, tg('sehrgut').basis, tg('sehrgut').vert);
+    const remF = scope === 'raus' ? 0 : remainingFor(effort, p.levels, p.assessed, p.mastery || 0, tg('faelle').basis, tg('faelle').vert);
+    // Prüfungsreife: wie nah am Sehr-gut-Ziel
+    const b = p.levels?.basis ?? (p.assessed ? p.mastery : 0), v = p.levels?.vertiefung ?? (p.assessed ? (p.mastery || 0) * 0.6 : 0);
+    const T = tg('sehrgut');
+    const readiness = (BASIS_SHARE * Math.min(b, T.basis) / T.basis) + ((1 - BASIS_SHARE) * (T.vert ? Math.min(v, T.vert) / T.vert : 1));
+    return { id: c.id, title: c.title, bookTitle: c.bookTitle, pages: c.pages, scope, prio, reasons, effort, remaining: remSG, remainingFaelle: remF, target: T, readiness,
+      mastery: p.mastery || 0, levels: p.levels || null, assessed: !!p.assessed, lastStudied: p.lastStudied || 0, altCount: alt[c.id] || 0, profCount: prof[c.id] || 0, caseCount: fs[c.id] || 0 };
   });
   const inScope = chapters.filter(c => c.scope !== 'raus');
   const avail = studyMinutesUntil(exam);
-  // 10 % Puffer für die Schlusswiederholung
-  const usable = avail.minutes === Infinity ? Infinity : avail.minutes * 0.9;
+  const usable = avail.minutes === Infinity ? Infinity : avail.minutes * 0.9; // 10 % Puffer für die Schlusswiederholung
   const need = inScope.reduce((a, c) => a + c.remaining, 0);
+  const needFaelle = inScope.reduce((a, c) => a + c.remainingFaelle, 0);
+  const effortTotal = inScope.reduce((a, c) => a + c.effort, 0);
+  const readiness = inScope.length ? inScope.reduce((a, c) => a + c.readiness * c.effort, 0) / Math.max(1, effortTotal) : 0;
 
-  const sorted = [...inScope].sort((a, b) => b.prio - a.prio || a.mastery - b.mastery);
+  // Empfohlene Lernstunden pro Lerntag (mit 10 % Puffer)
+  const perDay = m => avail.studyDays ? m / 0.9 / avail.studyDays / 60 : null;
+  const hoursSehrGut = perDay(need), hoursFaelle = perDay(needFaelle);
+
+  const sorted = [...inScope].sort((a, b) => b.prio - a.prio || a.readiness - b.readiness);
   let used = 0;
   for (const c of sorted) {
     if (used + c.remaining <= usable) { c.plan = 'voll'; c.planMin = c.remaining; }
-    else if (c.prio >= 2 && used + c.remaining * 0.4 <= usable) { c.plan = 'kurz'; c.planMin = c.remaining * 0.4; }
+    else if (used + c.remainingFaelle <= usable && c.prio >= 1.5) { c.plan = 'kurz'; c.planMin = c.remainingFaelle; }
+    else if (c.prio >= 2 && used + c.remainingFaelle * 0.5 <= usable) { c.plan = 'kurz'; c.planMin = c.remainingFaelle * 0.5; }
     else { c.plan = 'wenn-zeit'; c.planMin = 0; }
     used += c.planMin;
   }
   chapters.filter(c => c.scope === 'raus').forEach(c => { c.plan = 'raus'; c.planMin = 0; });
 
   const ratio = usable === Infinity ? 0 : need / Math.max(1, usable);
+  const h = x => x == null ? '–' : (Math.ceil(x * 2) / 2).toLocaleString('de-AT');
   let status, message;
-  const cover = inScope.length ? Math.round(100 * inScope.filter(c => c.plan === 'voll').reduce((a, c) => a + c.remaining, 0) / Math.max(1, need)) : 100;
   if (!exam.date) { status = 'offen'; message = 'Kein Prüfungstermin eingetragen – trag einen Termin ein, dann rechne ich mit deiner tatsächlichen Zeit.'; }
   else if (avail.days <= 0) { status = 'vorbei'; message = 'Der Prüfungstermin ist vorbei. Trag ein, wie es gelaufen ist – bei Bedarf rechnet der Plan dann mit dem Ersatztermin weiter.'; }
   else if (!inScope.length) { status = 'offen'; message = 'Noch keine Kapitel – verarbeite zuerst die Lehrbücher.'; }
-  else if (ratio <= 0.85) { status = 'gut'; message = `Die Zeit reicht gut für den gesamten Stoff. Es bleibt Luft für Falltraining und Wiederholung.`; }
-  else if (ratio <= 1.05) { status = 'knapp'; message = `Die Zeit reicht, ist aber knapp. Bleib bei den „muss sitzen“-Kapiteln dran.`; }
-  else { status = 'eng'; message = `Für alles im Detail reicht die Zeit nicht (ca. ${cover} % voll). Ich habe priorisiert: Was „muss sitzen“ ist voll eingeplant, wichtige Kapitel als Überblick, der Rest nur wenn Zeit bleibt.`; }
+  else if (need <= usable) { status = 'gut'; message = `Mit ${exam.hoursPerDay} h pro Lerntag reicht es für ein Sehr gut (nötig wären ca. ${h(hoursSehrGut)} h).`; }
+  else if (needFaelle <= usable) { status = 'knapp'; message = `Für ein Sehr gut bräuchtest du ca. ${h(hoursSehrGut)} h pro Lerntag (eingeplant: ${exam.hoursPerDay} h). Für „Fälle sicher lösen“ reicht deine Zeit (ca. ${h(hoursFaelle)} h nötig) – darauf ist der Plan ausgerichtet.`; }
+  else { status = 'eng'; message = `Für ein Sehr gut bräuchtest du ca. ${h(hoursSehrGut)} h, für „Fälle sicher lösen“ ca. ${h(hoursFaelle)} h pro Lerntag (eingeplant: ${exam.hoursPerDay} h). Ich habe priorisiert: Das Wichtigste ist voll eingeplant, der Rest nur, wenn Zeit bleibt.`; }
 
   const todayOff = offReason(todayIso());
-  return { chapters, inScope, need, available: avail.minutes, usable, days: avail.days, studyDays: avail.studyDays, offDays: avail.off, offList: avail.offList || [], ratio, status, message, todayOff, today: todayOff ? [] : todaySuggestions(sorted, exam) };
+  return { chapters, inScope, need, needFaelle, hoursSehrGut, hoursFaelle, readiness, available: avail.minutes, usable, days: avail.days, studyDays: avail.studyDays, offDays: avail.off, offList: avail.offList || [], ratio, status, message, todayOff, today: todayOff ? [] : todaySuggestions(sorted, exam) };
 }
 
 export function todaySuggestions(sorted, exam) {
   const now = Date.now();
   const cand = sorted.filter(c => c.plan === 'voll' || c.plan === 'kurz')
     .filter(c => now - c.lastStudied > 30 * 3600 * 1000)
-    .sort((a, b) => b.prio * (1.05 - b.mastery) - a.prio * (1.05 - a.mastery));
+    .sort((a, b) => b.prio * (1.05 - b.readiness) - a.prio * (1.05 - a.readiness));
   const budget = (Number(exam.hoursPerDay) || 2) * 60;
   const out = [];
   let used = 0;

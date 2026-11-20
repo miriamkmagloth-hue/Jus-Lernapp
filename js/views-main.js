@@ -50,7 +50,8 @@ export function dashboard(el) {
     const cls = { gut: 'green', knapp: 'yellow', eng: 'red' }[plan.status] || 'blue';
     html += `<div class="card"><div class="row between"><div><div class="item-title">${esc(s.name)} · ${esc(e.name)}</div><div class="small muted">${e.type === 'muendlich' ? 'mündlich' : 'schriftlich'}${e.date ? ' · ' + fmtDate(e.date) : ''}</div></div>
       <div style="text-align:right">${d != null ? `<div class="stat-num" style="font-size:1.4rem;font-weight:700">${d}</div><div class="tiny muted">Tage</div>` : ''}</div></div>
-      <div class="row" style="margin-top:8px"><span class="pill ${cls}">${{ gut: 'Zeit reicht', knapp: 'knapp', eng: 'priorisiert', offen: 'offen', vorbei: 'vorbei' }[plan.status]}</span><span class="small muted">${esc(plan.message)}</span></div>`;
+      ${plan.inScope.length ? `<div class="row" style="margin-top:8px"><div class="progress green" style="flex:1"><div style="width:${Math.round(plan.readiness * 100)}%"></div></div><span class="small"><strong>${Math.round(plan.readiness * 100)} %</strong> prüfungsreif</span></div>` : ''}
+      <div class="row" style="margin-top:8px"><span class="pill ${cls}">${{ gut: 'Sehr gut erreichbar', knapp: 'Fälle sicher', eng: 'priorisiert', offen: 'offen', vorbei: 'vorbei' }[plan.status]}</span><span class="small muted">${esc(plan.message)}</span></div>`;
     if (plan.today.length) {
       html += `<h4>Heute sinnvoll</h4><ul class="list">` + plan.today.map(t => `<li><a class="item" href="#/fach/${s.id}/kapitel/${t.id}"><span class="dot ${ampel(t.mastery, t.assessed)}"></span><div><div>${esc(t.title)}</div><div class="small muted">${esc(t.action)} · ca. ${fmtMin(t.min)}</div></div><span class="chev">›</span></a></li>`).join('') + `</ul>`;
     }
