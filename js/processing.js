@@ -1,6 +1,6 @@
 // Verarbeitung: Ordner scannen, Lehrbücher gliedern und zusammenfassen, Transkripte/Altklausuren/Urteile analysieren
 import { store, uid, textGet, textSet, allChapters, findChapter, isStudyChapter, bookRole } from './store.js';
-import { listRecursive, downloadFile, getFileMeta } from './drive.js';
+import { listRecursive, downloadFile, getFileMeta, readAppFile, writeAppFile, isSignedIn } from './drive.js';
 import { fileToText, isSupported, pagesToText } from './extract.js';
 import { completeJson, clip } from './ai.js';
 import { searchJustiz, fetchDocText, toRisNorm, extractCitations } from './ris.js';
@@ -64,16 +64,54 @@ function registerItem(sb, f) {
 }
 
 // ---------- Text einer Datei holen (mit lokalem Zwischenspeicher) ----------
+const textName = fileId => `text-${fileId}.json`;
+
 export async function getFileText(sub, fileId, onProgress) {
   const cached = await textGet('file:' + fileId);
   const meta = sub.files[fileId];
-  if (cached && (!meta || cached.modifiedTime === meta.modifiedTime)) return cached;
+  const fresh = v => v && (!meta || v.modifiedTime === meta.modifiedTime);
+  if (fresh(cached)) {
+    if (!cached.shared && cached.pages) shareText(fileId, cached);
+    return cached;
+  }
+  // Schon auf einem anderen Gerät ausgelesen? Dann von dort holen (spart Download und Auslesen am Handy)
+  if (isSignedIn()) {
+    try {
+      onProgress && onProgress(0, 0);
+      const remote = await readAppFile(textName(fileId));
+      if (fresh(remote)) {
+        const val = { ...remote, text: remote.pages ? pagesToText(remote.pages) : remote.text, shared: true };
+        await textSet('file:' + fileId, val);
+        return val;
+      }
+    } catch (e) { console.warn('Geteilter Text nicht lesbar', e); }
+  }
   const file = meta || await getFileMeta(fileId);
   const data = await downloadFile(file);
   const r = await fileToText(file, data, onProgress);
   const val = { text: r.text, pages: r.pages, outline: r.outline || [], modifiedTime: file.modifiedTime };
   await textSet('file:' + fileId, val);
+  if (val.pages) shareText(fileId, val);
   return val;
+}
+
+// Bereits ausgelesene Bücher dieses Geräts für andere Geräte bereitstellen
+export async function shareAllTexts(sub) {
+  for (const b of sub.books || []) {
+    const v = await textGet('file:' + b.fileId);
+    if (v && v.pages && !v.shared) shareText(b.fileId, v);
+  }
+}
+
+// Ausgelesenen Text im privaten App-Datenordner ablegen, damit andere Geräte ihn nicht neu auslesen müssen
+const sharing = new Set();
+function shareText(fileId, val) {
+  if (!isSignedIn() || sharing.has(fileId)) return;
+  sharing.add(fileId);
+  writeAppFile(textName(fileId), { pages: val.pages, outline: val.outline || [], text: val.pages ? '' : val.text, modifiedTime: val.modifiedTime })
+    .then(() => textSet('file:' + fileId, { ...val, shared: true }))
+    .catch(e => console.warn('Text nicht geteilt', e))
+    .finally(() => sharing.delete(fileId));
 }
 
 export async function chapterText(sub, chId) {

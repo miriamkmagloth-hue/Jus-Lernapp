@@ -186,3 +186,26 @@ export async function syncOnStart() {
 }
 
 store.remoteSaver = () => writeRemoteState();
+
+// ---------- Weitere Dateien im privaten App-Datenordner (z. B. ausgelesene Buchtexte) ----------
+const appFileIds = {};
+async function findAppFile(name) {
+  if (appFileIds[name]) return appFileIds[name];
+  const q = encodeURIComponent(`name = '${name}'`);
+  const j = await (await gfetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id)`)).json();
+  return (appFileIds[name] = j.files?.[0]?.id || null);
+}
+export async function readAppFile(name) {
+  const id = await findAppFile(name);
+  if (!id) return null;
+  return (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json();
+}
+export async function writeAppFile(name, obj) {
+  const body = JSON.stringify(obj);
+  const id = await findAppFile(name);
+  if (id) { await gfetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body }); return; }
+  const boundary = 'b' + Math.random().toString(36).slice(2);
+  const multipart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: ['appDataFolder'] })}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
+  const j = await (await gfetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body: multipart })).json();
+  appFileIds[name] = j.id;
+}

@@ -39,6 +39,8 @@ export async function complete({ system = '', messages, model = 'smart', maxToke
       if (c.provider === 'openai') return await openai(c.key, modelName, sys, messages, maxTokens, json, signal);
       throw new Error('Unbekannter KI-Anbieter');
     } catch (e) {
+      // Netzwerkabbruch (z. B. Funkloch, Bildschirm aus) → automatisch nochmal versuchen
+      if (e instanceof TypeError || /network|fetch|Verbindung unterbrochen/i.test(e.message)) { e.retry = true; e.message = 'Die Internetverbindung ist abgebrochen. Bitte App geöffnet und Bildschirm an lassen und nochmal versuchen.'; }
       lastErr = e;
       if (e.name === 'AbortError' || !e.retry) throw e;
       await new Promise(r => setTimeout(r, 2000 * (attempt + 1) ** 2));
@@ -57,7 +59,7 @@ async function httpErr(res, label) {
 
 async function anthropic(key, model, system, messages, maxTokens, cacheSystem, signal) {
   const body = {
-    model, max_tokens: maxTokens,
+    model, max_tokens: maxTokens, stream: true,
     system: [{ type: 'text', text: system, ...(cacheSystem && system.length > 4000 ? { cache_control: { type: 'ephemeral' } } : {}) }],
     messages: messages.map(m => ({ role: m.role, content: m.content }))
   };
@@ -67,8 +69,30 @@ async function anthropic(key, model, system, messages, maxTokens, cacheSystem, s
     body: JSON.stringify(body)
   });
   if (!res.ok) throw await httpErr(res, 'Claude');
-  const j = await res.json();
-  return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  if ((res.headers.get('content-type') || '').includes('application/json')) {
+    const j = await res.json();
+    return (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  }
+  // Antwort Stück für Stück lesen: hält die Verbindung auch bei langen Antworten am Handy offen
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', out = '', stop = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line.startsWith('data:')) continue;
+      let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') out += ev.delta.text;
+      else if (ev.type === 'message_delta' && ev.delta?.stop_reason) stop = ev.delta.stop_reason;
+      else if (ev.type === 'error') { const e = new Error('Claude: ' + (ev.error?.message || 'Fehler')); e.retry = /overloaded|rate/i.test(ev.error?.type || ''); throw e; }
+    }
+  }
+  if (!out && !stop) { const e = new Error('Verbindung unterbrochen'); e.retry = true; throw e; }
+  return out;
 }
 
 async function gemini(key, model, system, messages, maxTokens, json, signal) {

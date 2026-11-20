@@ -5,7 +5,7 @@ import { signIn, syncOnStart, onSync, isSignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
 import { applyTheme } from './theme.js';
-import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings } from './processing.js';
+import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings, shareAllTexts } from './processing.js';
 import * as main from './views-main.js';
 import * as subj from './views-subject.js';
 import * as learn from './views-learn.js';
@@ -129,6 +129,7 @@ export async function autoUpdate({ subjects = null } = {}) {
       const neu = await scanSubject(id, st);
       if (neu.length) toast(`${neu.length} neue Datei(en) in „${sub.name}“ gefunden`);
     }, { subId: id });
+    shareAllTexts(store.subject(id)).catch(() => {});
     if (store.state.settings.autoProcess === false) continue;
     queueProcessing(id);
     const s2 = store.subject(id);
