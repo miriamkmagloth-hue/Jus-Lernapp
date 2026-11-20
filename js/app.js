@@ -3,6 +3,7 @@ import { store, local } from './store.js';
 import { signIn, syncOnStart, onSync, isSignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
+import { applyTheme } from './theme.js';
 import { scanSubject, processBook, analyzeUnit, analyzeAltklausur, summarizeRuling, checkNewRulings } from './processing.js';
 import * as main from './views-main.js';
 import * as subj from './views-subject.js';
@@ -26,7 +27,8 @@ const routes = [
   [/^#\/statistik$/, main.statsView, 'statistik'],
   [/^#\/fehlerbuch$/, main.mistakesView, 'statistik'],
   [/^#\/einstellungen$/, main.settingsView, 'einstellungen'],
-  [/^#\/einrichtung$/, main.setupView, 'einstellungen']
+  [/^#\/einrichtung$/, main.setupView, 'einstellungen'],
+  [/^#\/design$/, main.designView, 'einstellungen']
 ];
 
 let currentHash = null;
@@ -121,6 +123,9 @@ export function queueProcessing(id) {
 
 async function start() {
   await store.load();
+  applyTheme();
+  let lastDesign = JSON.stringify(store.state.settings.design || {});
+  store.on(st => { const d = JSON.stringify(st.settings.design || {}); if (d !== lastDesign) { lastDesign = d; applyTheme(); } });
   render();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (local.googleClientId && local.loggedInHint) {

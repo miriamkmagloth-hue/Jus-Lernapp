@@ -8,6 +8,7 @@ import { CATEGORIES } from './processing.js';
 import { aiReady } from './ai.js';
 import { activeJobs } from './jobs.js';
 import { dueCards } from './views-learn.js';
+import { PRESETS, FONTS, ACCENTS, COLOR_FIELDS, UI_COLORS, INK_COLORS, BG_COLORS, design, saveDesign, glassValues, setGlass, setAppBgImage, overlayCss, imageFileToDataUrl } from './theme.js';
 
 const WEEKDAYS = [[1, 'Mo'], [2, 'Di'], [3, 'Mi'], [4, 'Do'], [5, 'Fr'], [6, 'Sa'], [0, 'So']];
 
@@ -243,6 +244,7 @@ export function settingsView(el) {
   const s = store.state.settings;
   const prov = s.provider;
   el.innerHTML = `<div data-no-rerender>
+  <a class="card" href="#/design" style="display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit"><span style="font-size:1.6rem">🎨</span><div><div class="item-title">Farben &amp; Design</div><div class="small muted">Vorlagen, Schriftart, Hell/Dunkel, Akzentfarbe, Hintergrundfoto</div></div><span class="chev">›</span></a>
   <div class="card"><h3>Google Drive</h3>
     <label class="field"><span>Google-Client-ID (aus der Einrichtung)</span><input type="text" id="clientId" value="${esc(local.googleClientId)}" placeholder="….apps.googleusercontent.com"></label>
     <div class="row">${isSignedIn() ? '<span class="pill green">verbunden</span><button class="btn secondary small" data-a="logout">Trennen</button>' : '<button class="btn small" data-a="login">Mit Google verbinden</button>'}
@@ -349,4 +351,133 @@ export function setupView(el) {
     try { await signIn(true); await syncOnStart(); toast('Eingerichtet!'); location.hash = '#/'; autoUpdate(); }
     catch (e) { toast(e.message, 6000); }
   };
+}
+
+// ---------------- Farben & Design ----------------
+function swatchRow(colors, current, onPick, { noneLabel = null } = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = 'swatches';
+  const draw = cur => {
+    wrap.innerHTML = (noneLabel ? `<button type="button" class="swatch none ${!cur ? 'on' : ''}" data-c="" title="${esc(noneLabel)}"></button>` : '') +
+      colors.map(c => `<button type="button" class="swatch ${cur === c ? 'on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('') +
+      `<label class="swatch" title="Eigene Farbe" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);position:relative"><input type="color" value="${cur || '#ffffff'}" style="opacity:0;position:absolute;inset:0;width:100%;height:100%;cursor:pointer"></label>`;
+    wrap.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { onPick(b.dataset.c || null); draw(b.dataset.c || null); });
+    wrap.querySelector('input[type=color]').onchange = e => { onPick(e.target.value); draw(e.target.value); };
+  };
+  draw(current);
+  return wrap;
+}
+function segmented(options, current, onPick) {
+  const w = document.createElement('div');
+  w.className = 'seg';
+  const draw = cur => {
+    w.innerHTML = options.map(o => `<button type="button" class="${o.value === cur ? 'on' : ''}" data-v="${o.value}">${esc(o.label)}</button>`).join('');
+    w.querySelectorAll('button').forEach(b => b.onclick = () => { onPick(b.dataset.v); draw(b.dataset.v); });
+  };
+  draw(current);
+  return w;
+}
+
+export function designView(el) {
+  setTitle('Farben & Design');
+  el.innerHTML = `<div data-no-rerender>
+    <div class="card"><h3>Vorlagen</h3><div class="preset-row" id="presets"></div></div>
+    <div class="card"><h3>Schriftart</h3><div class="font-row" id="fonts"></div></div>
+    <div class="card"><h3>Hell oder dunkel</h3><div id="mode"></div></div>
+    <div class="card"><h3>Akzentfarbe</h3><p class="small muted">Knöpfe, Reiter, Markierungen</p><div id="accent"></div></div>
+    <div class="card" id="customSec"><h3>Eigene Farben</h3><div id="custom"></div><button type="button" class="btn secondary small" id="resetColors">Farben der Vorlage wiederherstellen</button></div>
+    <div class="card"><h3>App-Hintergrund</h3><p class="small muted">Farbe oder Foto hinter allen Seiten</p><div id="bgType" style="margin-bottom:12px"></div><div id="bgPanel"></div></div>
+    <div class="card"><h3>Durchsichtigkeit</h3><p class="small muted">Wie stark der Hintergrund durchscheint. 0 % = ganz durchsichtig, 100 % = deckend. Wirkt, wenn ein App-Hintergrund gewählt ist.</p><div id="glass"></div></div>
+    <p class="small muted">Gilt auf allen deinen Geräten.</p></div>`;
+
+  const renderPresets = () => {
+    const p = design();
+    const box = el.querySelector('#presets');
+    box.innerHTML = PRESETS.map(pr => {
+      const c = pr.colors || { bg: '#1c1b1a', side: '#232120', card: '#2c2a27' };
+      return `<button type="button" class="preset ${(p.preset || 'creme') === pr.id ? 'on' : ''}" data-id="${pr.id}"><div class="pv" style="background:${c.bg}"><i style="background:${c.side}"></i><b style="background:${c.card};border-top:3px solid ${pr.accent}"></b></div><span>${esc(pr.name)}</span></button>`;
+    }).join('');
+    box.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
+      const pr = PRESETS.find(x => x.id === b.dataset.id);
+      saveDesign({ preset: pr.id, themeMode: pr.mode, accent: null, colors: null });
+      renderAll();
+    });
+  };
+  const renderFonts = () => {
+    const box = el.querySelector('#fonts');
+    const cur = design().font || FONTS[0].id;
+    box.innerHTML = FONTS.map(f => `<button type="button" class="font-opt ${f.id === cur ? 'on' : ''}" data-id="${f.id}"><span class="fo-big" style="font-family:${esc(f.display)}">Aa</span><span style="font-family:${esc(f.body)}">${esc(f.name)}</span><small>${esc(f.hint)}</small></button>`).join('');
+    box.querySelectorAll('[data-id]').forEach(b => b.onclick = () => { saveDesign({ font: b.dataset.id }); renderFonts(); });
+  };
+  const renderMode = () => {
+    const box = el.querySelector('#mode'); box.innerHTML = '';
+    box.append(segmented([{ value: 'light', label: 'Hell' }, { value: 'dark', label: 'Dunkel' }, { value: 'auto', label: 'Wie das Gerät' }], design().themeMode || 'light', v => { saveDesign({ themeMode: v }); renderColors(); }));
+  };
+  const renderAccent = () => {
+    const box = el.querySelector('#accent'); box.innerHTML = '';
+    box.append(swatchRow(ACCENTS, design().accent || null, c => saveDesign({ accent: c }), { noneLabel: 'Standard der Vorlage' }));
+  };
+  const renderColors = () => {
+    const p = design();
+    el.querySelector('#customSec').hidden = (p.themeMode || 'light') !== 'light';
+    const box = el.querySelector('#custom'); box.innerHTML = '';
+    const base = (PRESETS.find(x => x.id === p.preset) || PRESETS[0]).colors || PRESETS[0].colors;
+    const cur = { ...base, ...(p.colors || {}) };
+    for (const f of COLOR_FIELDS) {
+      const row = document.createElement('div'); row.className = 'color-field';
+      row.innerHTML = `<span>${esc(f.label)}</span>`;
+      row.append(swatchRow(f.key === 'ink' ? INK_COLORS : UI_COLORS, cur[f.key], c => saveDesign({ colors: { ...(design().colors || {}), [f.key]: c || base[f.key] } })));
+      box.append(row);
+    }
+  };
+  el.querySelector('#resetColors').onclick = () => { saveDesign({ colors: null }); renderColors(); };
+
+  let bg = { ...(design().appBg || { type: 'none' }) };
+  const saveBg = () => saveDesign({ appBg: { ...bg } });
+  const renderBg = () => {
+    const panel = el.querySelector('#bgPanel'); panel.innerHTML = '';
+    if (bg.type === 'color') panel.append(swatchRow(BG_COLORS, bg.color, c => { bg.color = c || BG_COLORS[4]; saveBg(); }));
+    if (bg.type === 'image') {
+      panel.innerHTML = `<div class="row" style="align-items:flex-start"><div class="bg-thumb" id="thumb"></div><div style="flex:1;min-width:180px">
+        <label class="btn secondary small">${bg.image ? 'Anderes Foto' : 'Foto wählen'}<input type="file" accept="image/*" id="pick" hidden></label>
+        <label class="field" style="margin-top:10px"><span>Abdunkeln ↔ Aufhellen</span><input type="range" min="-70" max="70" step="5" id="dim"></label>
+        <label class="field"><span>Deckkraft <b id="opVal"></b></span><input type="range" min="10" max="100" step="5" id="op"></label></div></div>`;
+      const thumb = panel.querySelector('#thumb');
+      const upd = () => {
+        thumb.style.background = bg.image ? `linear-gradient(${overlayCss(bg.dim)}, ${overlayCss(bg.dim)}), url("${bg.image}") center / cover` : 'var(--grey-soft)';
+        thumb.style.opacity = typeof bg.opacity === 'number' ? Math.max(0.25, bg.opacity) : 1;
+      };
+      upd();
+      const dim = panel.querySelector('#dim'), op = panel.querySelector('#op'), opVal = panel.querySelector('#opVal');
+      dim.value = Math.round((bg.dim || 0) * 100);
+      op.value = Math.round((typeof bg.opacity === 'number' ? bg.opacity : 1) * 100); opVal.textContent = op.value + ' %';
+      dim.oninput = () => { bg.dim = Number(dim.value) / 100; upd(); if (bg.image) setAppBgImage(bg); };
+      op.oninput = () => { bg.opacity = Number(op.value) / 100; opVal.textContent = op.value + ' %'; upd(); if (bg.image) setAppBgImage(bg); };
+      dim.onchange = op.onchange = saveBg;
+      panel.querySelector('#pick').onchange = async e => {
+        const f = e.target.files[0]; if (!f) return;
+        try { bg = { ...bg, type: 'image', image: await imageFileToDataUrl(f) }; saveBg(); renderBg(); }
+        catch { toast('Das Foto konnte nicht geladen werden'); }
+      };
+    }
+  };
+  el.querySelector('#bgType').append(segmented([{ value: 'none', label: 'Keiner' }, { value: 'color', label: 'Farbe' }, { value: 'image', label: 'Foto' }], bg.type || 'none', v => {
+    if (v === 'none') bg = { type: 'none' };
+    if (v === 'color') bg = { type: 'color', color: bg.color || BG_COLORS[4] };
+    if (v === 'image') bg = { type: 'image', image: bg.image || '', dim: bg.dim || 0, opacity: bg.opacity ?? 1 };
+    if (v !== 'image' || bg.image) saveBg();
+    renderBg();
+  }));
+
+  const renderGlass = () => {
+    const box = el.querySelector('#glass');
+    const vals = glassValues();
+    box.innerHTML = [['bars', 'Kopfzeile & Navigation'], ['cards', 'Karten']].map(([k, l]) => `<label class="field"><span>${l} <b data-out="${k}">${vals[k]} %</b></span><input type="range" min="0" max="100" step="5" value="${vals[k]}" data-k="${k}"></label>`).join('');
+    box.querySelectorAll('[data-k]').forEach(inp => {
+      inp.oninput = () => { vals[inp.dataset.k] = Number(inp.value); box.querySelector(`[data-out=${inp.dataset.k}]`).textContent = inp.value + ' %'; setGlass(vals); };
+      inp.onchange = () => saveDesign({ glass: { ...vals } });
+    });
+  };
+  const renderAll = () => { renderPresets(); renderFonts(); renderMode(); renderAccent(); renderColors(); };
+  renderAll(); renderBg(); renderGlass();
 }
