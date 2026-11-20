@@ -3,12 +3,20 @@ import { store, uid, allChapters, findChapter } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, ampel } from './ui.js';
 import { setTitle, render } from './app.js';
 import { completeJson, complete, clip } from './ai.js';
-import { chapterText, recordResult, addMistake, getFileText } from './processing.js';
+import { chapterText, recordResult, recordLevelResult, combineLevels, addMistake, getFileText } from './processing.js';
 import { mountChat, speak } from './chat.js';
 import { activeExams } from './planner.js';
 
 const shuffle = a => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 const noRerender = el => el.setAttribute('data-no-rerender', '');
+const lvlOf = q => (String(q.ebene || '').toLowerCase().startsWith('vert') ? 'vertiefung' : 'basis');
+export const lvlPill = q => lvlOf(q) === 'vertiefung' ? '<span class="pill gold">Vertiefung</span>' : '<span class="pill blue">Basis</span>';
+const LEVEL_PROMPT = { basis: 'NUR Basiswissen (ebene "basis")', gemischt: 'etwa zwei Drittel Basiswissen und ein Drittel Vertiefung', vertiefung: 'NUR Vertiefungs-/Spezialwissen (ebene "vertiefung") mit hohem Schwierigkeitsgrad' };
+function addLevel(acc, cid, q, ok) {
+  const l = lvlOf(q);
+  acc[cid] = acc[cid] || { basis: [0, 0], vertiefung: [0, 0] };
+  acc[cid][l][1]++; if (ok) acc[cid][l][0]++;
+}
 
 function summaryDigest(c) {
   const s = c.summary;
@@ -20,7 +28,7 @@ function summaryDigest(c) {
 export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
   const start = () => {
     el.innerHTML = `<div class="card"><h3>Multiple-Choice-Test</h3><p class="small muted">${count} Fragen aus dem Lehrbuchtext${title ? ' zu „' + esc(title) + '“' : ''}. Jede Antwort mit Erklärung und Seitenangabe.</p>
-      <label class="field"><span>Schwierigkeit</span><select id="lvl"><option value="gemischt">gemischt</option><option value="leicht">Grundlagen</option><option value="schwer">Klausurniveau / Details</option></select></label>
+      <label class="field"><span>Was möchtest du üben?</span><select id="lvl"><option value="gemischt">Gemischt (vor allem Basis, etwas Vertiefung)</option><option value="basis">Basiswissen (muss sitzen)</option><option value="vertiefung">Vertiefung / Spezialwissen (schwer)</option></select></label>
       <button class="btn" data-a="go">Test erstellen</button></div>`;
     el.querySelector('[data-a=go]').onclick = () => generate(el.querySelector('#lvl').value);
   };
@@ -33,7 +41,7 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
       const r = await completeJson({
         model: 'smart', maxTokens: 6000,
         system: 'Du erstellst Multiple-Choice-Prüfungsfragen ausschließlich aus dem gegebenen Lehrbuchtext.',
-        messages: [{ role: 'user', content: `Erstelle ${count} Multiple-Choice-Fragen (Schwierigkeit: ${level}). Je 4 Antwortoptionen, genau eine richtig. Falsche Optionen sollen plausibel sein (typische Verwechslungen). Mische Wissens-, Verständnis- und Anwendungsfragen (Mini-Fälle).\nJSON: {"fragen":[{"frage":"…","optionen":["…","…","…","…"],"richtig":Index 0-3,"erklaerung":"warum richtig, warum die anderen falsch","seite":"S. …","kapitelId":"…"}]}\n\nLEHRBUCHTEXT:${material}` }]
+        messages: [{ role: 'user', content: `Erstelle ${count} Multiple-Choice-Fragen: ${LEVEL_PROMPT[level] || LEVEL_PROMPT.gemischt}. Kennzeichne jede Frage mit "ebene". Je 4 Antwortoptionen, genau eine richtig. Falsche Optionen sollen plausibel sein (typische Verwechslungen). Mische Wissens-, Verständnis- und Anwendungsfragen (Mini-Fälle).\nJSON: {"fragen":[{"frage":"…","optionen":["…","…","…","…"],"richtig":Index 0-3,"erklaerung":"warum richtig, warum die anderen falsch","seite":"S. …","kapitelId":"…","ebene":"basis|vertiefung"}]}\n\nLEHRBUCHTEXT:${material}` }]
       });
       const qs = (r.fragen || []).filter(q => q.optionen?.length >= 2).map(q => {
         const opts = q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }));
@@ -48,7 +56,7 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
     const perChapter = {};
     const show = () => {
       const q = qs[i];
-      el.innerHTML = `<div class="card"><div class="row between small muted"><span>Frage ${i + 1} von ${qs.length}</span><span>${right} richtig</span></div>
+      el.innerHTML = `<div class="card"><div class="row between small muted"><span>Frage ${i + 1} von ${qs.length} ${lvlPill(q)}</span><span>${right} richtig</span></div>
         <div class="progress" style="margin:8px 0 14px"><div style="width:${(i / qs.length) * 100}%"></div></div>
         <div class="item-title" style="font-size:1.05rem">${enrich(esc(q.frage))}</div>
         <div style="margin-top:10px">${q.opts.map((o, k) => `<button class="mc-option" data-k="${k}">${enrich(esc(o.text))}</button>`).join('')}</div><div id="fb"></div></div>`;
@@ -59,7 +67,7 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
       const ok = q.opts[k].ok;
       if (ok) right++;
       const cid = q.kapitelId && findChapter(sub, q.kapitelId) ? q.kapitelId : chapterIds[0];
-      perChapter[cid] = perChapter[cid] || [0, 0]; perChapter[cid][1]++; if (ok) perChapter[cid][0]++;
+      addLevel(perChapter, cid, q, ok);
       if (!ok) addMistake({ subId: sub.id, chapterId: cid, chapterTitle: findChapter(sub, cid)?.chapter.title, question: q.frage, yourAnswer: q.opts[k].text, correct: q.opts.find(o => o.ok)?.text, explanation: q.erklaerung });
       el.querySelectorAll('.mc-option').forEach((b, j) => { b.disabled = true; if (q.opts[j].ok) b.classList.add('correct'); else if (j === k) b.classList.add('wrong'); });
       el.querySelector('#fb').innerHTML = `<div class="notice ${ok ? 'ok' : 'err'}" style="margin-top:10px"><strong>${ok ? 'Richtig!' : 'Leider falsch.'}</strong> ${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}${md(q.erklaerung)}</div>
@@ -68,9 +76,11 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
     };
     const finish = () => {
       const frac = right / qs.length;
-      for (const [cid, [r, n]] of Object.entries(perChapter)) recordResult([cid], r / n, 'mc');
+      for (const [cid, lv] of Object.entries(perChapter)) recordLevelResult(cid, lv, 'mc');
+      const sum = k => Object.values(perChapter).reduce((a, x) => [a[0] + x[k][0], a[1] + x[k][1]], [0, 0]);
+      const sb = sum('basis'), sv = sum('vertiefung');
       store.update(s => { s.progress.quizzes.push({ at: Date.now(), subId: sub.id, chapterIds, score: frac, n: qs.length }); if (s.progress.quizzes.length > 1000) s.progress.quizzes = s.progress.quizzes.slice(-1000); }, { silent: true });
-      el.innerHTML = `<div class="card" style="text-align:center"><div style="font-size:2.4rem;font-weight:700">${right}/${qs.length}</div><p>${frac >= 0.85 ? 'Sehr gut – das sitzt!' : frac >= 0.6 ? 'Gut, ein paar Lücken. Falsche Antworten sind im Fehlerbuch.' : 'Hier lohnt sich nochmal die Zusammenfassung. Falsche Antworten sind im Fehlerbuch.'}</p>
+      el.innerHTML = `<div class="card" style="text-align:center"><div style="font-size:2.4rem;font-weight:700">${right}/${qs.length}</div><div class="small muted">${sb[1] ? `Basis ${sb[0]}/${sb[1]}` : ''}${sb[1] && sv[1] ? ' · ' : ''}${sv[1] ? `Vertiefung ${sv[0]}/${sv[1]}` : ''}</div><p>${frac >= 0.85 ? 'Sehr gut – das sitzt!' : frac >= 0.6 ? 'Gut, ein paar Lücken. Falsche Antworten sind im Fehlerbuch.' : 'Hier lohnt sich nochmal die Zusammenfassung. Falsche Antworten sind im Fehlerbuch.'}</p>
         <div class="row" style="justify-content:center"><button class="btn" data-a="again">Neuer Test</button><a class="btn secondary" href="#/fehlerbuch">Fehlerbuch</a></div></div>`;
       el.querySelector('[data-a=again]').onclick = start;
     };
@@ -89,10 +99,10 @@ export function mountFreeQuestion(el, sub, ch) {
       const q = await completeJson({
         model: 'smart', maxTokens: 2500,
         system: 'Du bist Prüferin und stellst offene Fragen ausschließlich zum gegebenen Lehrbuchtext.',
-        messages: [{ role: 'user', content: `Stelle EINE offene Prüfungsfrage zu diesem Kapitel (wie in einer mündlichen Prüfung oder als Kurzfrage in einer Klausur). Variiere: Definition, Abgrenzung, Voraussetzungen, Rechtsfolgen, Mini-Fall.\nBereits gestellt (nicht wiederholen): ${(ch._asked || []).join(' | ') || '–'}\nJSON: {"frage":"…","musterantwort":"Markdown, mit Seitenangaben","kernpunkte":["was eine gute Antwort enthalten muss"]}\n\nKAPITELTEXT:\n${clip(text, 250000)}` }]
+        messages: [{ role: 'user', content: `Stelle EINE offene Prüfungsfrage zu diesem Kapitel (wie in einer mündlichen Prüfung oder als Kurzfrage in einer Klausur), Ebene: ${level === 'basis' ? 'Basiswissen' : level === 'vertiefung' ? 'Vertiefung / Spezialwissen' : 'meist Basis, gelegentlich Vertiefung'}. Variiere: Definition, Abgrenzung, Voraussetzungen, Rechtsfolgen, Mini-Fall.\nBereits gestellt (nicht wiederholen): ${(ch._asked || []).join(' | ') || '–'}\nJSON: {"frage":"…","ebene":"basis|vertiefung","musterantwort":"Markdown, mit Seitenangaben","kernpunkte":["was eine gute Antwort enthalten muss"]}\n\nKAPITELTEXT:\n${clip(text, 250000)}` }]
       });
       ch._asked = [...(ch._asked || []), q.frage].slice(-10);
-      el.innerHTML = `<div class="card"><div class="item-title" style="font-size:1.05rem">${enrich(esc(q.frage))}</div>
+      el.innerHTML = `<div class="card"><div style="margin-bottom:6px">${lvlPill(q)}</div><div class="item-title" style="font-size:1.05rem">${enrich(esc(q.frage))}</div>
         <textarea id="ans" placeholder="Deine Antwort (auch stichwortartig) …" style="margin-top:12px"></textarea>
         <div class="row" style="margin-top:8px"><button class="btn" data-a="check">Bewerten lassen</button><button class="btn ghost small" data-a="skip">Andere Frage</button><button class="btn ghost small" data-a="show">Lösung zeigen</button></div><div id="res"></div></div>`;
       el.querySelector('[data-a=skip]').onclick = start;
@@ -109,7 +119,7 @@ export function mountFreeQuestion(el, sub, ch) {
             messages: [{ role: 'user', content: `FRAGE: ${q.frage}\nMUSTERANTWORT: ${q.musterantwort}\nKERNPUNKTE: ${(q.kernpunkte || []).join(' | ')}\nANTWORT DER STUDENTIN: ${ans}\n\nJSON: {"punkte": 0-10, "richtig": ["was gut war"], "fehlt": ["was gefehlt hat oder falsch war"], "feedback": "kurzes Feedback in Markdown"}` }]
           });
           const frac = Math.max(0, Math.min(10, Number(g.punkte) || 0)) / 10;
-          recordResult([ch.id], frac, 'frei');
+          recordLevelResult(ch.id, { [lvlOf(q)]: [frac, 1] }, 'frei');
           if (frac < 0.6) addMistake({ subId: sub.id, chapterId: ch.id, chapterTitle: ch.title, question: q.frage, yourAnswer: ans, correct: (q.kernpunkte || []).join('; '), explanation: q.musterantwort });
           res.innerHTML = `<hr><div class="row between"><h4 style="margin:0">Bewertung</h4><span class="pill ${frac >= 0.75 ? 'green' : frac >= 0.45 ? 'yellow' : 'red'}">${g.punkte}/10</span></div>
             ${g.richtig?.length ? `<div class="small"><strong>Gut:</strong><ul>${g.richtig.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
@@ -121,8 +131,10 @@ export function mountFreeQuestion(el, sub, ch) {
       };
     } catch (e) { el.innerHTML = errorBox(e) + '<button class="btn secondary small" data-a="r">Nochmal</button>'; el.querySelector('[data-a=r]').onclick = start; }
   };
-  el.innerHTML = `<div class="card"><h3>Freie Fragen</h3><p class="small muted">Die KI stellt dir offene Fragen wie eine Prüferin und bewertet deine Antwort.</p><button class="btn" data-a="go">Los geht's</button></div>`;
-  el.querySelector('[data-a=go]').onclick = start;
+  let level = 'gemischt';
+  el.innerHTML = `<div class="card"><h3>Freie Fragen</h3><p class="small muted">Die KI stellt dir offene Fragen wie eine Prüferin und bewertet deine Antwort.</p>
+    <label class="field"><span>Was möchtest du üben?</span><select id="flvl"><option value="gemischt">Gemischt</option><option value="basis">Basiswissen</option><option value="vertiefung">Vertiefung / Spezialwissen</option></select></label><button class="btn" data-a="go">Los geht's</button></div>`;
+  el.querySelector('[data-a=go]').onclick = () => { level = el.querySelector('#flvl').value; start(); };
 }
 
 // ======================= Karteikarten =======================
@@ -147,7 +159,7 @@ export function mountChapterCards(el, sub, ch) {
   const due = dueCards(sub.id).filter(d => d.chId === ch.id);
   el.innerHTML = `<div class="card"><h3>Karteikarten</h3>
     ${cards.length ? `<p class="small">${cards.length} Karten · ${due.length} jetzt fällig</p><div class="row"><button class="btn" data-a="learn" ${due.length ? '' : 'disabled'}>Fällige lernen</button><button class="btn secondary" data-a="all">Alle durchgehen</button><button class="btn ghost small" data-a="gen">Weitere erstellen</button></div>
-      <details style="margin-top:10px"><summary class="small">Alle Karten ansehen</summary><ul class="list">${cards.map(c => `<li class="small"><strong>${enrich(esc(c.front))}</strong><br>${enrich(esc(c.back))}</li>`).join('')}</ul></details>`
+      <details style="margin-top:10px"><summary class="small">Alle Karten ansehen</summary><ul class="list">${cards.map(c => `<li class="small">${c.ebene ? lvlPill(c) + ' ' : ''}<strong>${enrich(esc(c.front))}</strong><br>${enrich(esc(c.back))}</li>`).join('')}</ul></details>`
       : `<p class="small muted">Noch keine Karten. Die KI erstellt sie aus dem Lehrbuchtext: Definitionen, Voraussetzungen, Abgrenzungen. Gelernt wird mit Wiederholungssystem – was du gut kannst, kommt seltener.</p><button class="btn" data-a="gen">Karten erstellen</button>`}</div><div id="session"></div>`;
   el.onclick = async e => {
     const a = e.target.closest('[data-a]')?.dataset.a;
@@ -159,9 +171,9 @@ export function mountChapterCards(el, sub, ch) {
         const r = await completeJson({
           model: 'smart', maxTokens: 6000,
           system: 'Du erstellst Lernkarteikarten ausschließlich aus dem gegebenen Lehrbuchtext.',
-          messages: [{ role: 'user', content: `Erstelle 15–25 Karteikarten zu den prüfungsrelevanten Inhalten (Definitionen, Voraussetzungen, Rechtsfolgen, Abgrenzungen, Normen). Vorderseite: präzise Frage. Rückseite: knappe, vollständige Antwort mit Seitenangabe.\nBereits vorhanden (nicht doppeln): ${cards.map(c => c.front).join(' | ').slice(0, 4000) || '–'}\nJSON: {"karten":[{"vorne":"…","hinten":"…"}]}\n\nKAPITELTEXT:\n${clip(text, 250000)}` }]
+          messages: [{ role: 'user', content: `Erstelle 15–25 Karteikarten zu den prüfungsrelevanten Inhalten (Definitionen, Voraussetzungen, Rechtsfolgen, Abgrenzungen, Normen). Vorderseite: präzise Frage. Rückseite: knappe, vollständige Antwort mit Seitenangabe.\nBereits vorhanden (nicht doppeln): ${cards.map(c => c.front).join(' | ').slice(0, 4000) || '–'}\nKennzeichne jede Karte mit "ebene" (basis oder vertiefung).\nJSON: {"karten":[{"vorne":"…","hinten":"…","ebene":"basis|vertiefung"}]}\n\nKAPITELTEXT:\n${clip(text, 250000)}` }]
         });
-        store.update(st => { st.cards[ch.id] = [...(st.cards[ch.id] || []), ...(r.karten || []).map(k => ({ id: uid('c_'), front: k.vorne, back: k.hinten }))]; });
+        store.update(st => { st.cards[ch.id] = [...(st.cards[ch.id] || []), ...(r.karten || []).map(k => ({ id: uid('c_'), front: k.vorne, back: k.hinten, ebene: lvlOf(k) }))]; });
         el.removeAttribute('data-no-rerender');
         mountChapterCards(el, sub, ch);
       } catch (err) { s.innerHTML = errorBox(err); }
@@ -182,12 +194,12 @@ function reviewSession(el, items, onDone) {
       el.querySelector('[data-a=done]').onclick = () => { el.removeAttribute('data-no-rerender'); onDone && onDone(); };
       // Kenntnisstand pro Kapitel leicht anpassen
       const per = {};
-      items.forEach(it => { per[it.chId] = per[it.chId] || [0, 0]; per[it.chId][1]++; if (it._ok) per[it.chId][0]++; });
-      for (const [cid, [r, n]] of Object.entries(per)) if (n >= 3) recordResult([cid], r / n, 'karten');
+      items.forEach(it => addLevel(per, it.chId, it.card, it._ok));
+      for (const [cid, lv] of Object.entries(per)) if (lv.basis[1] + lv.vertiefung[1] >= 3) recordLevelResult(cid, lv, 'karten');
       return;
     }
     const it = items[i];
-    el.innerHTML = `<div class="small muted" style="margin:10px 0">${i + 1} / ${items.length} · ${esc(it.chTitle)}</div>
+    el.innerHTML = `<div class="small muted" style="margin:10px 0">${i + 1} / ${items.length} · ${esc(it.chTitle)} ${it.card.ebene ? lvlPill(it.card) : ''}</div>
       <div class="card flashcard" data-a="flip"><div>${enrich(esc(it.card.front))}<div class="tiny muted" style="margin-top:14px">Antippen zum Umdrehen</div></div></div><div id="btns"></div>`;
     el.querySelector('[data-a=flip]').onclick = () => {
       el.querySelector('.flashcard').innerHTML = `<div><div class="small muted">${enrich(esc(it.card.front))}</div><hr><div>${enrich(esc(it.card.back))}</div></div>`;
@@ -459,7 +471,7 @@ export function assessmentView(el, subId, examId) {
         const r = await completeJson({
           model: 'smart', maxTokens: 5000,
           system: 'Du erstellst kurze Diagnosefragen, um den Kenntnisstand pro Kapitel einzuschätzen. Nur Stoff aus den Zusammenfassungen.',
-          messages: [{ role: 'user', content: `Erstelle für JEDES der folgenden Kapitel genau 3 Multiple-Choice-Fragen mit je 4 Optionen (eine richtig): eine Grundlagenfrage, eine Verständnisfrage, eine Anwendungsfrage (Mini-Fall).\nJSON: {"fragen":[{"kapitelId":"…","frage":"…","optionen":["…","…","…","…"],"richtig":0-3,"erklaerung":"kurz"}]}\n\n${batch.map(summaryDigest).join('\n\n').slice(0, 120000)}` }]
+          messages: [{ role: 'user', content: `Erstelle für JEDES der folgenden Kapitel genau 3 Multiple-Choice-Fragen mit je 4 Optionen (eine richtig): zwei Fragen zum BASISWISSEN (eine Verständnisfrage, eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und eine Frage zur VERTIEFUNG (Spezialwissen).\nJSON: {"fragen":[{"kapitelId":"…","frage":"…","optionen":["…","…","…","…"],"richtig":0-3,"erklaerung":"kurz","ebene":"basis|vertiefung"}]}\n\n${batch.map(summaryDigest).join('\n\n').slice(0, 120000)}` }]
         });
         qs = (r.fragen || []).filter(q => q.optionen?.length >= 2 && batch.some(c => c.id === q.kapitelId)).map(q => ({ ...q, opts: shuffle(q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }))) }));
         if (!qs.length) throw new Error('Keine Fragen erhalten');
@@ -472,25 +484,27 @@ export function assessmentView(el, subId, examId) {
             for (const c of batch) {
               const sc = score[c.id]; if (!sc) continue;
               const p = s.progress.chapters[c.id] || (s.progress.chapters[c.id] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 });
-              p.mastery = sc[0] / sc[1]; p.assessed = true; p.assessedAt = Date.now();
+              const f = k => sc[k][1] ? sc[k][0] / sc[k][1] : null;
+              p.levels = { basis: f('basis'), vertiefung: f('vertiefung') };
+              p.mastery = combineLevels(p.levels); p.assessed = true; p.assessedAt = Date.now();
             }
           });
           b++;
-          el.innerHTML = `<div class="card" style="text-align:center"><p>Block ${b} von ${batches.length} geschafft.</p>${batch.map(c => { const sc = score[c.id]; return sc ? `<div class="row" style="justify-content:center"><span class="dot ${ampel(sc[0] / sc[1], true)}"></span><span class="small">${esc(c.title)}: ${sc[0]}/${sc[1]}</span></div>` : ''; }).join('')}
+          el.innerHTML = `<div class="card" style="text-align:center"><p>Block ${b} von ${batches.length} geschafft.</p>${batch.map(c => { const sc = score[c.id]; if (!sc) return ''; const m = combineLevels({ basis: sc.basis[1] ? sc.basis[0] / sc.basis[1] : null, vertiefung: sc.vertiefung[1] ? sc.vertiefung[0] / sc.vertiefung[1] : null }); return `<div class="row" style="justify-content:center"><span class="dot ${ampel(m, true)}"></span><span class="small">${esc(c.title)}: Basis ${sc.basis[0]}/${sc.basis[1]} · Vertiefung ${sc.vertiefung[0]}/${sc.vertiefung[1]}</span></div>`; }).join('')}
             <div class="row" style="justify-content:center;margin-top:12px">${b < batches.length ? '<button class="btn" data-a="go">Weiter</button>' : '<button class="btn" data-a="go">Abschließen</button>'}<a class="btn secondary" href="#/fach/${subId}/pruefung/${examId}">Pause</a></div></div>`;
           el.querySelector('[data-a=go]').onclick = next;
           return;
         }
         const q = qs[i];
         const ch = batch.find(c => c.id === q.kapitelId);
-        el.innerHTML = `<div class="card"><div class="small muted">Block ${b + 1}/${batches.length} · Frage ${i + 1}/${qs.length} · ${esc(ch?.title || '')}</div>
+        el.innerHTML = `<div class="card"><div class="small muted">Block ${b + 1}/${batches.length} · Frage ${i + 1}/${qs.length} · ${esc(ch?.title || '')} ${lvlPill(q)}</div>
           <div class="item-title" style="margin:10px 0;font-size:1.05rem">${enrich(esc(q.frage))}</div>
           ${q.opts.map((o, k) => `<button class="mc-option" data-k="${k}">${enrich(esc(o.text))}</button>`).join('')}
           <button class="mc-option" data-k="-1" style="color:var(--muted)">Weiß ich nicht</button><div id="fb"></div></div>`;
         el.querySelectorAll('.mc-option').forEach(btn => btn.onclick = () => {
           const k = +btn.dataset.k;
           const ok = k >= 0 && q.opts[k].ok;
-          score[q.kapitelId] = score[q.kapitelId] || [0, 0]; score[q.kapitelId][1]++; if (ok) score[q.kapitelId][0]++;
+          addLevel(score, q.kapitelId, q, ok);
           el.querySelectorAll('.mc-option').forEach((bb, j) => { bb.disabled = true; if (j < q.opts.length && q.opts[j].ok) bb.classList.add('correct'); else if (+bb.dataset.k === k) bb.classList.add('wrong'); });
           el.querySelector('#fb').innerHTML = `<div class="small" style="margin:10px 0">${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
           el.querySelector('[data-a=n]').onclick = () => { i++; show(); };

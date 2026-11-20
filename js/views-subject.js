@@ -4,7 +4,7 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
 import { isSignedIn } from './drive.js';
@@ -112,7 +112,7 @@ function tabStoff(el, sub) {
         const scope = exam?.scopeMap?.[c.id];
         if (!isStudyChapter(c)) return `<li><a class="item" href="#/fach/${sub.id}/kapitel/${c.id}" style="opacity:.55"><span class="dot"></span><div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">kein Lernstoff – ausgeblendet</div></div><span class="chev">›</span></a></li>`;
         return `<li><a class="item" href="#/fach/${sub.id}/kapitel/${c.id}"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span>
-          <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div></div><span class="chev">›</span></a></li>`;
+          <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div></div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
   el.querySelectorAll('[data-proc]').forEach(btn => btn.onclick = () => {
@@ -133,7 +133,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
   const p = store.state.progress.chapters[chId];
   const parts = [['zusammenfassung', 'Zusammenfassung'], ['test', 'Multiple Choice'], ['fragen', 'Freie Fragen'], ['karten', 'Karteikarten'], ['chat', 'Chat'], ['text', 'Lehrbuchtext']];
   el.innerHTML = `<div class="small muted">${esc(sub.name)} · ${esc(book.title)} · S. ${esc(ch.startLabel || ch.startPage)}–${esc(ch.endLabel || ch.endPage)}</div>
-    <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %` : 'noch nicht eingestuft'}</span></div>
+    <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %${p.levels ? ' (' + levelText(p) + ')' : ''}` : 'noch nicht eingestuft'}</span></div>
     ${isStudyChapter(ch) ? '' : `<div class="notice warn small">Dieses Kapitel zählt nicht als Lernstoff (z. B. Verzeichnis oder Übersicht) und kommt in Plan, Einstufung und Tests nicht vor. <button class="btn ghost small" data-vis="show">Doch als Lernstoff zählen</button></div>`}
     <div class="tabs">${parts.map(([k, l]) => `<a class="tab ${k === part ? 'active' : ''}" href="#/fach/${subId}/kapitel/${chId}/${k}">${l}</a>`).join('')}</div><div id="part"></div>
     ${isStudyChapter(ch) ? `<div style="margin-top:16px"><button class="btn ghost small" data-vis="hide">Kein Lernstoff – Kapitel ausblenden</button></div>` : ''}`;
@@ -151,8 +151,8 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
       body.innerHTML = job && !job.done ? busy('Das Lehrbuch wird gerade verarbeitet …') : `<div class="card">Noch keine Zusammenfassung. <button class="btn small" data-a="sum">Jetzt erstellen</button></div>`;
     } else {
       body.innerHTML = `<div class="card"><h3>Worum geht es?</h3>${md(s.kurzfassung)}</div>
-      ${(s.themen || []).map(t => `<details class="card" open><summary>${esc(t.titel)} <span class="cite">${esc(t.seiten || '')}</span></summary>${md(t.inhalt)}</details>`).join('')}
-      ${s.definitionen?.length ? `<div class="card"><h3>Definitionen</h3><ul class="list">${s.definitionen.map(d => `<li><strong>${esc(d.begriff)}</strong> ${d.seite ? `<span class="cite">[S. ${esc(String(d.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}<div class="small">${enrich(esc(d.definition))}</div></li>`).join('')}</ul></div>` : ''}
+      ${(s.themen || []).map(t => `<details class="card" open><summary>${esc(t.titel)} <span class="cite">${esc(t.seiten || '')}</span> ${String(t.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span>' : ''}</summary>${md(t.inhalt)}</details>`).join('')}
+      ${s.definitionen?.length ? `<div class="card"><h3>Definitionen</h3><ul class="list">${s.definitionen.map(d => `<li><strong>${esc(d.begriff)}</strong> ${String(d.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span> ' : ''}${d.seite ? `<span class="cite">[S. ${esc(String(d.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}<div class="small">${enrich(esc(d.definition))}</div></li>`).join('')}</ul></div>` : ''}
       ${s.schemata?.length ? `<div class="card"><h3>Prüfungsschemata</h3>${s.schemata.map(sc => `<h4>${esc(sc.titel)}</h4><ol>${(sc.schritte || []).map(x => `<li>${enrich(esc(x))}</li>`).join('')}</ol>`).join('')}</div>` : ''}
       ${s.stolperfallen?.length ? `<div class="card" style="border-color:var(--hl)"><h3>⚠ Stolperfallen</h3><ul>${s.stolperfallen.map(x => `<li>${enrich(esc(x.text || x))} ${x.seite ? `<span class="cite">[S. ${esc(String(x.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}</li>`).join('')}</ul></div>` : ''}
       ${s.normen?.length ? `<div class="card"><h3>Normen</h3>${s.normen.map(n => `<span class="pill blue" style="margin:2px">${enrich(esc(n))}</span>`).join(' ')}</div>` : ''}

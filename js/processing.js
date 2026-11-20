@@ -205,7 +205,7 @@ export async function summarizeChapter(subId, fileId, chId, pagesOpt) {
   const r = await completeJson({
     model: 'smart', maxTokens: 9000,
     system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du.`,
-    messages: [{ role: 'user', content: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}` }]
+    messages: [{ role: 'user', content: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y", "ebene": "basis|vertiefung"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}` }]
   });
   store.update(s => {
     const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId);
@@ -440,6 +440,40 @@ export function recordResult(chapterIds, fraction, kind) {
       if (p.quizzes.length > 30) p.quizzes = p.quizzes.slice(-30);
     }
   });
+}
+
+// Ergebnis getrennt nach Basis / Vertiefung: levels = { basis: [richtig, gesamt], vertiefung: [richtig, gesamt] }
+export function recordLevelResult(chId, levels, kind) {
+  store.update(s => {
+    const p = s.progress.chapters[chId] || (s.progress.chapters[chId] = { mastery: 0, assessed: false, quizzes: [], studied: 0, lastStudied: 0 });
+    p.levels = p.levels || { basis: null, vertiefung: null };
+    for (const k of ['basis', 'vertiefung']) {
+      const v = levels[k];
+      if (!v || !v[1]) continue;
+      const f = v[0] / v[1];
+      p.levels[k] = p.levels[k] == null ? f : p.levels[k] * 0.6 + f * 0.4;
+    }
+    p.mastery = combineLevels(p.levels, p.mastery, p.assessed);
+    p.assessed = true;
+    p.lastStudied = Date.now();
+    const tot = (levels.basis?.[1] || 0) + (levels.vertiefung?.[1] || 0);
+    const ok = (levels.basis?.[0] || 0) + (levels.vertiefung?.[0] || 0);
+    p.quizzes.push({ at: Date.now(), score: tot ? ok / tot : 0, kind });
+    if (p.quizzes.length > 30) p.quizzes = p.quizzes.slice(-30);
+  });
+}
+// Basis zählt mehr (75 %), Vertiefung 25 %
+export function combineLevels(l, prev = 0, assessed = false) {
+  const b = l.basis, v = l.vertiefung;
+  if (b != null && v != null) return 0.75 * b + 0.25 * v;
+  if (b != null) return assessed && prev ? Math.min(prev * 0.5 + b * 0.5, b) : b * 0.9;
+  if (v != null) return assessed ? prev * 0.75 + v * 0.25 : v * 0.5;
+  return prev;
+}
+export function levelText(p) {
+  if (!p?.levels) return '';
+  const f = x => x == null ? '–' : Math.round(x * 100) + ' %';
+  return `Basis ${f(p.levels.basis)} · Vertiefung ${f(p.levels.vertiefung)}`;
 }
 
 export function markStudied(chId) {

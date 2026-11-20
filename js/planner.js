@@ -32,7 +32,7 @@ export function computePlan(sub, exam) {
     const effort = base * (exam.type === 'schriftlich' ? 1.25 : 1);
     const remaining = p.assessed ? effort * Math.max(0.12, 1 - p.mastery) : effort;
     const prio = PRIO_BASE[scope] + Math.min(1.5, (alt[c.id] || 0) * 0.5) + Math.min(1, (prof[c.id] || 0) * 0.3);
-    return { id: c.id, title: c.title, bookTitle: c.bookTitle, pages: c.pages, scope, prio, effort, remaining, mastery: p.mastery || 0, assessed: !!p.assessed, lastStudied: p.lastStudied || 0, altCount: alt[c.id] || 0, profCount: prof[c.id] || 0 };
+    return { id: c.id, title: c.title, bookTitle: c.bookTitle, pages: c.pages, scope, prio, effort, remaining, mastery: p.mastery || 0, levels: p.levels || null, assessed: !!p.assessed, lastStudied: p.lastStudied || 0, altCount: alt[c.id] || 0, profCount: prof[c.id] || 0 };
   });
   const inScope = chapters.filter(c => c.scope !== 'raus');
   const avail = studyMinutesUntil(exam);
@@ -75,6 +75,8 @@ export function todaySuggestions(sorted, exam) {
   for (const c of cand) {
     let action, min;
     if (!c.assessed) { action = 'Einstufen: kurzer Test, ob du das schon kannst'; min = 10; }
+    else if (c.levels && c.levels.basis != null && c.levels.basis < 0.7) { action = 'Basis festigen: Zusammenfassung, Schemata, dann Basis-Test'; min = Math.min(c.remaining, 90); }
+    else if (c.levels && c.levels.basis >= 0.75 && (c.levels.vertiefung == null || c.levels.vertiefung < 0.6) && c.mastery < 0.8) { action = 'Basis sitzt – jetzt Vertiefung üben (Spezialfragen)'; min = Math.min(c.remaining, 45); }
     else if (c.mastery < 0.45) { action = 'Zusammenfassung durcharbeiten, dann Test'; min = Math.min(c.remaining, 90); }
     else if (c.mastery < 0.75) { action = exam.type === 'schriftlich' ? 'Fall üben oder Test' : 'Abfrage im Chat oder Test'; min = Math.min(c.remaining, 60); }
     else { action = 'Kurz wiederholen (Karteikarten)'; min = 20; }
