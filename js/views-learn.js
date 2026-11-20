@@ -2,7 +2,7 @@
 import { store, uid, allChapters, findChapter } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, ampel } from './ui.js';
 import { setTitle, render } from './app.js';
-import { completeJson, complete, clip } from './ai.js';
+import { completeJson, complete, clip, parseJson } from './ai.js';
 import { chapterText, recordResult, recordLevelResult, combineLevels, addMistake, getFileText, setBaseline } from './processing.js';
 import { mountChat, speak } from './chat.js';
 import { activeExams } from './planner.js';
@@ -469,39 +469,71 @@ const PRECISION = `Anforderungen an jede Frage:
 - Anwendungsfragen nutzen einen kurzen, klaren Mini-Sachverhalt.
 - Die Erklärung begründet die richtige Antwort mit Seitenangabe aus dem Lehrbuchtext.`;
 
+let lastRaw = '';
 async function makeQuestions(sub, chapters, per) {
   let material = '';
   for (const c of chapters) {
     let t = '';
     try { t = await chapterText(sub, c.id); } catch {}
-    material += `\n\n# KAPITEL [ID ${c.id}] „${c.title}“\n` + (t ? clip(t, Math.floor(180000 / chapters.length)) : summaryDigest(c));
+    material += `\n\n# KAPITEL [ID ${c.id}] „${c.title}“\n` + (t ? clip(t, Math.floor(120000 / chapters.length)) : summaryDigest(c));
   }
-  const r = await completeJson({
-    model: 'smart', maxTokens: 12000,
-    system: 'Du erstellst präzise Diagnosefragen, um den Kenntnisstand pro Kapitel zuverlässig einzuschätzen. Grundlage ist ausschließlich der Lehrbuchtext.',
-    messages: [{ role: 'user', content: `Erstelle für JEDES Kapitel unten Multiple-Choice-Fragen mit je 4 Optionen: ${per.basis} Fragen zum BASISWISSEN (davon mind. eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und ${per.vert} Frage(n) zur VERTIEFUNG.\n${PRECISION}\nJSON: {"fragen":[{"kapitelId":"…","frage":"…","optionen":["…","…","…","…"],"richtig":0-3,"erklaerung":"…","seite":"S. …","ebene":"basis|vertiefung"}]}\n${material}` }]
+  const text = await complete({
+    model: 'smart', maxTokens: 16000, json: true,
+    system: 'Du erstellst präzise Diagnosefragen, um den Kenntnisstand pro Kapitel zuverlässig einzuschätzen. Grundlage ist ausschließlich der Lehrbuchtext. Antworte AUSSCHLIESSLICH mit gültigem JSON im vorgegebenen Format, ohne Text davor oder danach.',
+    messages: [{ role: 'user', content: `Erstelle für JEDES Kapitel unten Multiple-Choice-Fragen mit je 4 Optionen: ${per.basis} Fragen zum BASISWISSEN (davon mind. eine Anwendung auf einen Mini-Fall bzw. ein Prüfungsschema) und ${per.vert} Frage(n) zur VERTIEFUNG.\n${PRECISION}\nHalte die Erklärungen kurz (max. 2 Sätze).\nGib eine FLACHE Liste zurück, genau in diesem Format (Optionen als reine Texte, "richtig" = Index 0–3 der richtigen Option):\n{"fragen":[{"kapitelId":"k_…","frage":"…","optionen":["…","…","…","…"],"richtig":0,"erklaerung":"…","seite":"S. …","ebene":"basis"}]}\n${material}` }]
   });
+  lastRaw = text || '';
+  let r;
+  try { r = parseJson(text); } catch { r = {}; }
   return normalizeQuestions(r, chapters, per);
 }
 
 // KI-Antworten robust auswerten: verschiedene Feldnamen, Kapitelzuordnung notfalls über Titel oder Reihenfolge
 export function normalizeQuestions(r, chapters, per = { basis: 4, vert: 2 }) {
-  const raw = Array.isArray(r) ? r : (r.fragen || r.questions || r.items || Object.values(r).find(Array.isArray) || []);
   const norm = x => String(x || '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, '');
+  const optsOf = q => q && (q.optionen || q.antworten || q.antwortoptionen || q.options || q.answers || q.auswahl);
+  // Fragen überall in der Antwort finden – auch verschachtelt, z. B. {"kapitel":[{"kapitelId":…,"fragen":[…]}]}
+  const raw = [];
+  const walk = (node, ctxId) => {
+    if (Array.isArray(node)) { node.forEach(n => walk(n, ctxId)); return; }
+    if (!node || typeof node !== 'object') return;
+    const id = node.kapitelId || node.kapitel_id || node.chapterId || node.id && String(node.id).startsWith('k_') && node.id || ctxId;
+    if (Array.isArray(optsOf(node))) { raw.push({ ...node, kapitelId: node.kapitelId || id }); return; }
+    for (const [k, v] of Object.entries(node)) {
+      // Schlüssel wie {"k_abc": [Fragen]} als Kapitel-ID werten
+      walk(v, /^k_/.test(k) ? k : id);
+    }
+  };
+  walk(r, null);
   const perCh = (per.basis || 0) + (per.vert || 0) || 6;
   const out = [];
   raw.forEach((q, idx) => {
-    const optionen = q.optionen || q.antworten || q.options || q.answers;
-    if (!Array.isArray(optionen) || optionen.length < 2) return;
-    let richtig = q.richtig ?? q.correct ?? q.loesung ?? q.answer;
-    if (typeof richtig === 'string') { const n = parseInt(richtig, 10); richtig = !isNaN(n) ? n : optionen.findIndex(o => norm(o) === norm(richtig)); if (richtig < 0) richtig = 'ABCD'.indexOf(String(q.richtig).trim().toUpperCase()[0]); }
+    let optionen = optsOf(q);
+    let richtig = q.richtig ?? q.korrekt ?? q.correct ?? q.richtigeAntwort ?? q.loesung ?? q.answer;
+    // Optionen als Objekte: [{"text":"…","richtig":true}]
+    if (optionen.some(o => o && typeof o === 'object')) {
+      const ri = optionen.findIndex(o => o && (o.richtig === true || o.korrekt === true || o.correct === true || o.isCorrect === true));
+      optionen = optionen.map(o => (o && typeof o === 'object') ? (o.text || o.antwort || o.option || o.label || '') : String(o));
+      if (ri >= 0) richtig = ri;
+    }
+    optionen = optionen.map(o => String(o).replace(/^\s*[A-Da-d][).:]\s+/, '')).filter(Boolean);
+    if (optionen.length < 2) return;
+    if (typeof richtig === 'string') {
+      const t = richtig.trim();
+      const n = parseInt(t, 10);
+      if (!isNaN(n)) richtig = n;
+      else if (/^[A-Da-d]([).:\s]|$)/.test(t)) richtig = 'ABCD'.indexOf(t[0].toUpperCase());
+      else richtig = optionen.findIndex(o => norm(o) === norm(t.replace(/^[A-Da-d][).:]\s+/, '')));
+    }
     if (typeof richtig !== 'number' || richtig < 0 || richtig >= optionen.length) return;
     let id = String(q.kapitelId || q.kapitel || q.chapterId || '').replace(/^ID\s*/i, '').trim();
     let ch = chapters.find(c => c.id === id) || chapters.find(c => id && (id.includes(c.id) || c.id.includes(id))) || chapters.find(c => id && norm(c.title) === norm(id));
     if (!ch) ch = chapters.length === 1 ? chapters[0] : chapters[Math.min(chapters.length - 1, Math.floor(idx / perCh))];
-    out.push({ ...q, frage: q.frage || q.question || q.text, optionen, richtig, kapitelId: ch.id, erklaerung: q.erklaerung || q.explanation || '', opts: shuffle(optionen.map((o, i) => ({ text: o, ok: i === richtig }))) });
+    const frage = q.frage || q.question || q.fragetext || q.text;
+    if (!frage) return;
+    out.push({ ...q, frage, optionen, richtig, kapitelId: ch.id, erklaerung: q.erklaerung || q.begruendung || q.explanation || '', opts: shuffle(optionen.map((o, i) => ({ text: o, ok: i === richtig }))) });
   });
-  return out.filter(q => q.frage);
+  return out;
 }
 
 export function assessmentView(el, subId, examId, onlyChapter) {
@@ -510,7 +542,13 @@ export function assessmentView(el, subId, examId, onlyChapter) {
   if (!exam) return;
   setTitle('Einstufung');
   noRerender(el);
-  const chs = allChapters(sub, { exam }).filter(c => c.summary && (!exam.scopeMap || exam.scopeMap[c.id] !== 'raus'));
+  // Alle Kapitel der Prüfung, Bücher in natürlicher Reihenfolge (Band 1, 2, 3 …), Kapitel nach Seiten
+  const natural = (a, b) => String(a).localeCompare(String(b), 'de', { numeric: true, sensitivity: 'base' });
+  const bookOrder = [...sub.books].sort((a, b) => natural(a.title, b.title)).map(b => b.fileId);
+  const allChs = allChapters(sub, { exam }).filter(c => !exam.scopeMap || exam.scopeMap[c.id] !== 'raus')
+    .sort((a, b) => bookOrder.indexOf(a.bookId) - bookOrder.indexOf(b.bookId) || (a.startPage || 0) - (b.startPage || 0));
+  const chs = allChs.filter(c => c.summary);
+  const waiting = allChs.filter(c => !c.summary);
   const prog = store.state.progress.chapters;
   if (!chs.length) { el.innerHTML = '<div class="card">Zuerst müssen die Lehrbücher verarbeitet sein (Zusammenfassungen).</div>'; return; }
   let per = DEPTH[sessionStorage.getItem('assessDepth')] || DEPTH.normal;
@@ -522,8 +560,11 @@ export function assessmentView(el, subId, examId, onlyChapter) {
   // Aufteilung: pro Lehrbuch, darin Teile mit höchstens 8 Kapiteln
   const parts = [];
   const byBook = new Map();
-  chs.forEach(c => { if (!byBook.has(c.bookId)) byBook.set(c.bookId, { title: c.bookTitle, chapters: [] }); byBook.get(c.bookId).chapters.push(c); });
+  allChs.forEach(c => { if (!byBook.has(c.bookId)) byBook.set(c.bookId, { title: c.bookTitle, chapters: [], waiting: [] }); });
+  chs.forEach(c => byBook.get(c.bookId).chapters.push(c));
+  waiting.forEach(c => byBook.get(c.bookId).waiting.push(c));
   for (const [bookId, b] of byBook) {
+    if (!b.chapters.length) continue;
     const n = Math.ceil(b.chapters.length / 8);
     const size = Math.ceil(b.chapters.length / n);
     for (let i = 0; i < n; i++) {
@@ -539,11 +580,11 @@ export function assessmentView(el, subId, examId, onlyChapter) {
   el.innerHTML = `<div class="card"><h3>Einstufungstest: ${esc(exam.name)}</h3>
     <p class="small">Aufgeteilt nach Lehrbüchern in überschaubare Teile. Mach einen Teil, wann es dir passt – der Lernplan rechnet sofort mit jedem fertigen Teil.</p>
     <div class="progress green" style="margin:8px 0 4px"><div style="width:${Math.round(100 * totalDone / chs.length)}%"></div></div>
-    <div class="tiny muted">${totalDone} von ${chs.length} Kapiteln eingestuft</div>
+    <div class="tiny muted">${totalDone} von ${chs.length} Kapiteln eingestuft${waiting.length ? ` · ${waiting.length} weitere Kapitel werden noch verarbeitet` : ''}</div>
     <label class="field" style="margin-top:12px"><span>Genauigkeit</span><select id="depth">${Object.entries(DEPTH).map(([k, d]) => `<option value="${k}" ${DEPTH[k] === per ? 'selected' : ''}>${esc(d.label)}</option>`).join('')}</select></label>
     ${nextPart ? `<button class="btn block" data-part="${nextPart.key}">▶ Als Nächstes: ${esc(nextPart.book)} – ${esc(nextPart.label)} <span class="tiny" style="opacity:.8">(ca. ${minutes(nextPart)} Min)</span></button>` : '<div class="notice ok small">Alles eingestuft. Du kannst einzelne Teile jederzeit wiederholen.</div>'}
     <p class="small muted" style="margin-top:10px">Wenn du etwas nicht weißt, wähle „Weiß ich nicht“. Hast du nur geraten, tippe vorher auf „🎲 Ich rate“ – geratene Treffer zählen nur halb.</p></div>
-    ${[...byBook.values()].map(b => `<div class="card"><h3>📘 ${esc(b.title)}</h3><ul class="list">${parts.filter(p => p.book === b.title).map(p => {
+    ${[...byBook.values()].map((b, bi) => `<div class="card"><h3>${bi + 1}. 📘 ${esc(b.title)}</h3>${b.waiting.length ? `<p class="tiny muted">${b.waiting.length} Kapitel ${b.chapters.length ? 'werden' : 'werden noch'} gerade verarbeitet und erscheinen hier, sobald ihre Zusammenfassung fertig ist.</p>` : ''}<ul class="list">${parts.filter(p => p.book === b.title).map(p => {
       const d = doneCount(p);
       const avg = d ? p.list.filter(c => prog[c.id]?.assessed).reduce((a, c) => a + prog[c.id].mastery, 0) / d : 0;
       return `<li><div class="row between"><div style="flex:1;min-width:0"><div class="item-title">${esc(p.label)} ${d === p.list.length ? `<span class="dot ${ampel(avg, true)}"></span>` : ''}</div>
@@ -607,15 +648,13 @@ export function assessmentView(el, subId, examId, onlyChapter) {
       el.innerHTML = busy(`Erstelle Fragen aus dem Lehrbuchtext (Block ${b + 1} von ${batches.length}) …`);
       const score = {};
       try {
-        let qs = await prepare(b);
+        const qs = await prepare(b);
         if (!qs.length) {
-          // zweiter Versuch: jedes Kapitel einzeln (kürzere, sicherere Anfragen)
-          el.innerHTML = busy('Erstelle die Fragen nochmal, diesmal Kapitel für Kapitel …');
-          qs = [];
-          for (const c of batch) { try { qs.push(...await makeQuestions(sub, [c], per)); } catch (e) { console.warn(e); } }
+          const e = new Error('Die KI-Antwort konnte nicht als Fragen gelesen werden. Bitte nicht mehrmals wiederholen (jeder Versuch kostet Guthaben) – schick mir stattdessen einen Screenshot inklusive der Details unten.');
+          e.details = lastRaw;
+          throw e;
         }
         prepare(b + 1);
-        if (!qs.length) throw new Error('Die KI hat keine verwertbaren Fragen geliefert. Bitte nochmal versuchen – falls es wieder passiert, schick mir einen Screenshot.');
         await ask(qs, score, `Block ${b + 1}/${batches.length}`);
         // Unklare Kapitel: gezielte Nachfragen
         const unclear = batch.filter(c => { const sc = score[c.id]; if (!sc || !sc.basis[1]) return false; const f = sc.basis[0] / sc.basis[1]; return f > 0.2 && f < 0.85; });
@@ -624,7 +663,11 @@ export function assessmentView(el, subId, examId, onlyChapter) {
           const qs2 = await makeQuestions(sub, unclear, { basis: per.extra, vert: 0 });
           if (qs2.length) await ask(qs2, score, 'Nachfragen');
         }
-      } catch (e) { delete pending[b]; el.innerHTML = errorBox(e) + '<button class="btn small" data-a="r">Nochmal</button>'; el.querySelector('[data-a=r]').onclick = next; return; }
+      } catch (e) {
+        delete pending[b];
+        el.innerHTML = errorBox(e) + (e.details != null ? `<details class="card" open><summary class="small">Details für Claude</summary><div class="tiny" style="white-space:pre-wrap;word-break:break-all">Länge: ${e.details.length} Zeichen\nAnfang: ${esc(e.details.slice(0, 500))}\n…\nEnde: ${esc(e.details.slice(-300))}</div></details>` : '') + '<button class="btn small" data-a="r">Nochmal</button>';
+        el.querySelector('[data-a=r]').onclick = next; return;
+      }
 
       store.update(s => {
         for (const c of batch) {
