@@ -28,7 +28,8 @@ const routes = [
   [/^#\/fehlerbuch$/, main.mistakesView, 'statistik'],
   [/^#\/einstellungen$/, main.settingsView, 'einstellungen'],
   [/^#\/einrichtung$/, main.setupView, 'einstellungen'],
-  [/^#\/design$/, main.designView, 'einstellungen']
+  [/^#\/design$/, main.designView, 'einstellungen'],
+  [/^#\/kalender$/, main.calendarView, 'home']
 ];
 
 let currentHash = null;

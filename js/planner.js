@@ -1,21 +1,14 @@
 // Lernplan: rechnet mit der Zeit, die tatsächlich bis zur Prüfung bleibt, und priorisiert
 import { store, allChapters } from './store.js';
+import { countStudyDays, offReason, todayIso } from './calendar.js';
 
 export const PRIO_LABEL = { muss: 'muss sitzen', wichtig: 'wichtig', optional: 'nur wenn Zeit', raus: 'kein Prüfungsstoff' };
 const PRIO_BASE = { muss: 3, wichtig: 2, optional: 1, raus: 0 };
 
 export function studyMinutesUntil(exam, fromDate = new Date()) {
-  if (!exam.date) return { minutes: Infinity, days: null, studyDays: null };
-  const end = new Date(exam.date + 'T00:00:00');
-  const d = new Date(fromDate); d.setHours(0, 0, 0, 0);
-  let days = 0, studyDays = 0;
-  const allowed = new Set((exam.studyDays && exam.studyDays.length ? exam.studyDays : [1, 2, 3, 4, 5, 6, 0]).map(Number));
-  while (d < end) {
-    days++;
-    if (allowed.has(d.getDay())) studyDays++;
-    d.setDate(d.getDate() + 1);
-  }
-  return { minutes: studyDays * (Number(exam.hoursPerDay) || 0) * 60, days, studyDays };
+  if (!exam.date) return { minutes: Infinity, days: null, studyDays: null, off: 0, offList: [] };
+  const r = countStudyDays(fromDate, exam.date, exam.studyDays);
+  return { ...r, minutes: r.studyDays * (Number(exam.hoursPerDay) || 0) * 60 };
 }
 
 function altFrequency(sub) {
@@ -67,7 +60,8 @@ export function computePlan(sub, exam) {
   else if (ratio <= 1.05) { status = 'knapp'; message = `Die Zeit reicht, ist aber knapp. Bleib bei den „muss sitzen“-Kapiteln dran.`; }
   else { status = 'eng'; message = `Für alles im Detail reicht die Zeit nicht (ca. ${cover} % voll). Ich habe priorisiert: Was „muss sitzen“ ist voll eingeplant, wichtige Kapitel als Überblick, der Rest nur wenn Zeit bleibt.`; }
 
-  return { chapters, inScope, need, available: avail.minutes, usable, days: avail.days, studyDays: avail.studyDays, ratio, status, message, today: todaySuggestions(sorted, exam) };
+  const todayOff = offReason(todayIso());
+  return { chapters, inScope, need, available: avail.minutes, usable, days: avail.days, studyDays: avail.studyDays, offDays: avail.off, offList: avail.offList || [], ratio, status, message, todayOff, today: todayOff ? [] : todaySuggestions(sorted, exam) };
 }
 
 export function todaySuggestions(sorted, exam) {

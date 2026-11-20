@@ -1,11 +1,12 @@
 // Hauptansichten: Übersicht, Fächer, Fach anlegen, Statistik, Fehlerbuch, Einstellungen, Einrichtung
 import { store, local, uid, newExam, normalizeSubject, allChapters, syncExam } from './store.js';
 import { signIn, signOut, isSignedIn, syncOnStart } from './drive.js';
-import { esc, md, toast, pickFolders, confirmDialog, fmtDate, daysUntil, fmtMin, barChart, ampel } from './ui.js';
+import { esc, md, toast, pickFolders, confirmDialog, fmtDate, daysUntil, fmtMin, barChart, ampel, openModal, closeModal, busy, errorBox } from './ui.js';
 import { setTitle, render, autoUpdate } from './app.js';
 import { computePlan, activeExams, subjectMastery } from './planner.js';
 import { CATEGORIES } from './processing.js';
-import { aiReady } from './ai.js';
+import { aiReady, completeJson } from './ai.js';
+import { REASONS, cal, addEntry, removeEntry, offReason, holidays, todayIso, iso } from './calendar.js';
 import { activeJobs } from './jobs.js';
 import { dueCards } from './views-learn.js';
 import { PRESETS, FONTS, ACCENTS, COLOR_FIELDS, UI_COLORS, INK_COLORS, BG_COLORS, design, saveDesign, glassValues, setGlass, setAppBgImage, overlayCss, imageFileToDataUrl } from './theme.js';
@@ -32,6 +33,12 @@ export function dashboard(el) {
     html += `<div class="card empty"><h2>Willkommen!</h2><p>Leg dein erstes Fach an. Die App fragt dich dabei, welche Prüfungen es gibt und wo in Google Drive die Unterlagen liegen.</p><a class="btn" href="#/fach/neu">+ Fach anlegen</a></div>`;
     el.innerHTML = html; bind(el); return;
   }
+
+  // Heute: frei / krank / überspringen
+  const off = offReason(todayIso());
+  html += off
+    ? `<div class="notice ok"><div class="row between"><span>${off.icon} <strong>Heute ist lernfrei:</strong> ${esc(off.label)}. Der Plan rechnet damit.</span>${off.entry && off.entry.from === off.entry.to ? `<button class="btn ghost small" data-undo="${off.entry.id}">Doch lernen</button>` : ''}</div></div>`
+    : `<div class="row" style="margin-bottom:14px"><button class="btn secondary small" data-quick="frei">🌿 Heute überspringen</button><button class="btn secondary small" data-quick="krank-ich">🤒 Ich bin krank</button><button class="btn secondary small" data-quick="krank-kind">🧸 Kind ist krank</button><a class="btn ghost small" href="#/kalender">📅 Lernkalender</a></div>`;
 
   // nächste Prüfungen
   const exams = st.subjects.flatMap(s => activeExams(s).map(e => ({ s, e }))).sort((a, b) => (a.e.date || '9999').localeCompare(b.e.date || '9999'));
@@ -80,6 +87,8 @@ function subjectCard(s) {
 }
 
 function bind(el) {
+  el.querySelectorAll('[data-quick]').forEach(b => b.onclick = () => quickOff(b.dataset.quick));
+  el.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { removeEntry(b.dataset.undo); render(); });
   el.querySelector('[data-a=login]')?.addEventListener('click', async () => {
     try { await signIn(true); await syncOnStart(); render(); autoUpdate(); } catch (e) { toast(e.message, 5000); }
   });
@@ -260,6 +269,7 @@ export function settingsView(el) {
   const prov = s.provider;
   el.innerHTML = `<div data-no-rerender>
   <a class="card" href="#/design" style="display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit"><span style="font-size:1.6rem">🎨</span><div><div class="item-title">Farben &amp; Design</div><div class="small muted">Vorlagen, Schriftart, Hell/Dunkel, Akzentfarbe, Hintergrundfoto</div></div><span class="chev">›</span></a>
+  <a class="card" href="#/kalender" style="display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit"><span style="font-size:1.6rem">📅</span><div><div class="item-title">Lernkalender</div><div class="small muted">Feiertage, Kindergarten-Schließtage, Kranktage, freie Tage</div></div><span class="chev">›</span></a>
   <div class="card"><h3>Google Drive</h3>
     <label class="field"><span>Google-Client-ID (aus der Einrichtung)</span><input type="text" id="clientId" value="${esc(local.googleClientId)}" placeholder="….apps.googleusercontent.com"></label>
     <div class="row">${isSignedIn() ? '<span class="pill green">verbunden</span><button class="btn secondary small" data-a="logout">Trennen</button>' : '<button class="btn small" data-a="login">Mit Google verbinden</button>'}
@@ -495,4 +505,86 @@ export function designView(el) {
   };
   const renderAll = () => { renderPresets(); renderFonts(); renderMode(); renderAccent(); renderColors(); };
   renderAll(); renderBg(); renderGlass();
+}
+
+// Schnell einen freien Tag / Krankheit eintragen
+function quickOff(reason) {
+  const t = todayIso();
+  if (reason === 'frei') { addEntry({ from: t, to: t, reason }); toast('Heute ist frei – der Plan verteilt den Stoff neu.'); render(); return; }
+  openModal(`<h3 style="margin-top:0">${REASONS[reason].icon} ${esc(REASONS[reason].label)}</h3>
+    <p class="small muted">Gute Besserung! Wie lange ungefähr? Du kannst das später jederzeit im Lernkalender ändern.</p>
+    <div class="grid2"><label class="field"><span>von</span><input type="date" id="qf" value="${t}"></label><label class="field"><span>bis (voraussichtlich)</span><input type="date" id="qt" value="${t}"></label></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn secondary" data-a="c">Abbrechen</button><button class="btn" data-a="ok">Eintragen</button></div>`, c => {
+    c.querySelector('[data-a=c]').onclick = closeModal;
+    c.querySelector('[data-a=ok]').onclick = () => { addEntry({ from: c.querySelector('#qf').value, to: c.querySelector('#qt').value, reason }); closeModal(); toast('Eingetragen – der Plan rechnet neu.'); render(); };
+  });
+}
+
+// ---------------- Lernkalender ----------------
+export function calendarView(el) {
+  setTitle('Lernkalender');
+  const c = cal();
+  const t = todayIso();
+  const upcoming = (c.entries || []).filter(e => (e.to || e.from) >= t);
+  const past = (c.entries || []).filter(e => (e.to || e.from) < t).slice(-10).reverse();
+  const y = new Date().getFullYear();
+  const hol = [...holidays(y).entries(), ...holidays(y + 1).entries()].filter(([d]) => d >= t).slice(0, 8);
+  const row = e => `<li><div class="row between"><div><div>${REASONS[e.reason]?.icon || '📌'} <strong>${esc(e.note || REASONS[e.reason]?.label || '')}</strong></div><div class="small muted">${fmtDate(e.from)}${e.to && e.to !== e.from ? ' – ' + fmtDate(e.to) : ''}</div></div>
+    <div class="row"><button class="btn ghost small" data-edit="${e.id}">Ändern</button><button class="btn ghost small" data-del="${e.id}">✕</button></div></div></li>`;
+  el.innerHTML = `<div data-no-rerender>
+    <p class="small muted">An diesen Tagen plant die App keine Lernzeit ein. Der Lernplan rechnet sofort neu.</p>
+    <div class="card"><h3>Lernfreie Tage eintragen</h3>
+      <div class="grid2"><label class="field"><span>von</span><input type="date" id="f" value="${t}"></label><label class="field"><span>bis</span><input type="date" id="to" value="${t}"></label></div>
+      <label class="field"><span>Grund</span><select id="r">${Object.entries(REASONS).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('')}</select></label>
+      <label class="field"><span>Notiz (optional)</span><input type="text" id="n" placeholder="z. B. Sommerschließzeit"></label>
+      <button class="btn" data-a="add">Eintragen</button></div>
+
+    <div class="card"><h3>🏠 Kindergarten-Schließtage übernehmen</h3>
+      <p class="small muted">Kopier die Schließtage aus dem Elternbrief oder von der Kindergarten-Website hier hinein. Die App erkennt die Daten automatisch.</p>
+      <textarea id="kgText" placeholder="z. B. „Weihnachten: 24.12.–6.1. geschlossen, Fenstertag 8.5., Sommer: 3.–21.8.“"></textarea>
+      <button class="btn secondary" data-a="kg" style="margin-top:8px">Daten erkennen und eintragen</button><div id="kgRes"></div></div>
+
+    <div class="card"><h3>Kommende lernfreie Tage</h3>${upcoming.length ? `<ul class="list">${upcoming.map(row).join('')}</ul>` : '<p class="small muted">Noch nichts eingetragen.</p>'}</div>
+
+    <div class="card"><h3>🎉 Feiertage</h3>
+      <label class="checkline"><input type="checkbox" id="hol" ${c.holidaysOff !== false ? 'checked' : ''}> Österreichische Feiertage sowie 24.12. und 31.12. automatisch freihalten</label>
+      <ul class="list">${hol.map(([d, n]) => `<li class="small">${fmtDate(d)} · ${esc(n)}</li>`).join('')}</ul></div>
+    ${past.length ? `<details class="card"><summary>Vergangene Einträge</summary><ul class="list">${past.map(row).join('')}</ul></details>` : ''}</div>`;
+
+  el.querySelector('#hol').onchange = e => { store.update(s => { s.calendar.holidaysOff = e.target.checked; }); };
+  el.onclick = async e => {
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    if (a === 'add') {
+      addEntry({ from: el.querySelector('#f').value, to: el.querySelector('#to').value, reason: el.querySelector('#r').value, note: el.querySelector('#n').value.trim() });
+      toast('Eingetragen'); calendarView(el);
+    }
+    if (a === 'kg') {
+      const text = el.querySelector('#kgText').value.trim();
+      if (!text) { toast('Bitte zuerst die Schließtage hineinkopieren'); return; }
+      const res = el.querySelector('#kgRes'); res.innerHTML = busy('Erkenne Daten …');
+      try {
+        const r = await completeJson({ model: 'fast', maxTokens: 2000, system: 'Du liest Schließtage eines Kindergartens aus einem Text aus.', messages: [{ role: 'user', content: `Heute ist ${t}. Lies alle Schließtage/-zeiträume aus. Fehlt die Jahreszahl, nimm das nächste passende Datum ab heute.\nJSON: {"zeitraeume":[{"von":"YYYY-MM-DD","bis":"YYYY-MM-DD","bezeichnung":"kurz"}]}\n\nTEXT:\n${text.slice(0, 8000)}` }] });
+        const list = (r.zeitraeume || []).filter(z => /^\d{4}-\d{2}-\d{2}$/.test(z.von));
+        if (!list.length) { res.innerHTML = '<div class="notice warn small">Keine Daten erkannt.</div>'; return; }
+        res.innerHTML = `<div class="notice small" style="margin-top:10px"><strong>Erkannt – bitte prüfen:</strong><ul>${list.map(z => `<li>${fmtDate(z.von)}${z.bis && z.bis !== z.von ? ' – ' + fmtDate(z.bis) : ''}: ${esc(z.bezeichnung || '')}</li>`).join('')}</ul><button class="btn small" data-a="kgok">Alle übernehmen</button></div>`;
+        res.querySelector('[data-a=kgok]').onclick = () => { list.forEach(z => addEntry({ from: z.von, to: z.bis || z.von, reason: 'kindergarten', note: z.bezeichnung ? 'Kindergarten: ' + z.bezeichnung : '' })); toast(list.length + ' Zeiträume eingetragen'); calendarView(el); };
+      } catch (err) { res.innerHTML = errorBox(err); }
+    }
+    const del = e.target.closest('[data-del]')?.dataset.del;
+    if (del) { removeEntry(del); calendarView(el); }
+    const ed = e.target.closest('[data-edit]')?.dataset.edit;
+    if (ed) {
+      const en = cal().entries.find(x => x.id === ed);
+      openModal(`<h3 style="margin-top:0">Eintrag ändern</h3><div class="grid2"><label class="field"><span>von</span><input type="date" id="ef" value="${en.from}"></label><label class="field"><span>bis</span><input type="date" id="et" value="${en.to || en.from}"></label></div>
+        <label class="field"><span>Grund</span><select id="er">${Object.entries(REASONS).map(([k, v]) => `<option value="${k}" ${k === en.reason ? 'selected' : ''}>${v.icon} ${v.label}</option>`).join('')}</select></label>
+        <label class="field"><span>Notiz</span><input type="text" id="en" value="${esc(en.note || '')}"></label>
+        <div class="row" style="justify-content:flex-end"><button class="btn secondary" data-m="c">Abbrechen</button><button class="btn" data-m="ok">Speichern</button></div>`, m => {
+        m.querySelector('[data-m=c]').onclick = closeModal;
+        m.querySelector('[data-m=ok]').onclick = () => {
+          store.update(s => { const x = s.calendar.entries.find(y => y.id === ed); x.from = m.querySelector('#ef').value; x.to = m.querySelector('#et').value || x.from; if (x.to < x.from) [x.from, x.to] = [x.to, x.from]; x.reason = m.querySelector('#er').value; x.note = m.querySelector('#en').value.trim(); });
+          closeModal(); calendarView(el);
+        };
+      });
+    }
+  };
 }
