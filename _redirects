@@ -1,0 +1,3 @@
+# Netlify: Weiterleitungen, damit die App das RIS ohne Browser-Sperren (CORS) abfragen kann
+/ris-api/*   https://data.bka.gv.at/ris/api/:splat   200
+/ris-doc/*   https://www.ris.bka.gv.at/:splat   200

@@ -1,0 +1,24 @@
+JUS-LERNAPP – SO BRINGST DU SIE INS NETZ
+
+1. ZIP entpacken (es entsteht ein Ordner "lernapp").
+
+2. Online stellen (kostenlos, Netlify):
+   - Auf https://app.netlify.com kostenlos registrieren.
+   - https://app.netlify.com/drop öffnen und den ganzen Ordner "lernapp" in das Feld ziehen.
+   - Netlify zeigt eine Adresse wie https://irgendwas-123.netlify.app
+     Unter "Site configuration → Change site name" kannst du einen schöneren Namen wählen,
+     z. B. https://jus-lernapp-maria.netlify.app
+   - Wichtig: Die Datei "_redirects" muss mit hochgeladen werden (sie liegt im Ordner).
+     Sie sorgt dafür, dass die App OGH-Urteile aus dem RIS laden kann.
+
+3. Die Adresse im Browser öffnen und auf "Zur Schritt-für-Schritt-Anleitung" tippen.
+   Dort steht, wie du den Google-Zugang (Client-ID) und den Claude-Schlüssel anlegst.
+   Bei Google als "Autorisierte JavaScript-Quelle" genau deine Netlify-Adresse eintragen
+   (ohne Schrägstrich am Ende).
+
+4. Am Handy: Adresse in Chrome öffnen → Menü (⋮) → "App installieren" bzw.
+   "Zum Startbildschirm hinzufügen".
+
+UPDATES: Wenn du eine neue Version bekommst, auf app.netlify.com → deine Seite →
+"Deploys" den neuen Ordner hineinziehen. Deine Daten bleiben erhalten (sie liegen in
+deinem Google Drive).
