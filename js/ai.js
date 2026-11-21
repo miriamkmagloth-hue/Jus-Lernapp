@@ -153,10 +153,40 @@ export function parseJson(text) {
   const open = t[start], close = open === '{' ? '}' : ']';
   const end = t.lastIndexOf(close);
   const slice = t.slice(start, end + 1);
-  try { return JSON.parse(slice); } catch (e) {
-    // häufige Fehler reparieren: Komma vor schließender Klammer
-    return JSON.parse(slice.replace(/,\s*([}\]])/g, '$1'));
+  try { return JSON.parse(slice); } catch {}
+  // typische KI-Fehler lokal reparieren (kostet nichts): unmaskierte Anführungszeichen, Zeilenumbrüche, abgeschnittenes Ende
+  return JSON.parse(repairJson(t.slice(start)));
+}
+
+export function repairJson(src) {
+  let out = '', inStr = false;
+  const stack = [];
+  const nextSig = i => { for (let k = i; k < src.length; k++) if (!/\s/.test(src[k])) return src[k]; return ''; };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (c === '\\') { out += c + (src[i + 1] ?? ''); i++; continue; }
+      if (c === '"') {
+        // echtes Ende eines Strings nur, wenn danach , : } ] oder Ende folgt – sonst ist es ein Zitat im Text
+        const n = nextSig(i + 1);
+        if (n === '' || ',:}]'.includes(n)) { inStr = false; out += c; } else out += '\\"';
+        continue;
+      }
+      if (c === '\n') { out += '\\n'; continue; }
+      if (c === '\r' || c === '\t') { out += ' '; continue; }
+      out += c; continue;
+    }
+    if (c === '"') { inStr = true; out += c; continue; }
+    if (c === '{' || c === '[') stack.push(c === '{' ? '}' : ']');
+    else if (c === '}' || c === ']') { if (stack.length) stack.pop(); }
+    out += c;
+    if (!stack.length && out.trim()) break; // Ende des JSON erreicht, Rest (Erklärtext) ignorieren
   }
+  if (inStr) out += '"';
+  out = out.replace(/,\s*$/, '');
+  // abgeschnittene Antwort: unvollständiges letztes Element entfernen und Klammern schließen
+  while (stack.length) { out = out.replace(/,\s*"[^"]*"\s*:?\s*$/, '').replace(/[,:]\s*$/, ''); out += stack.pop(); }
+  return out.replace(/,\s*([}\]])/g, '$1');
 }
 
 export async function completeJson(opts) {
@@ -165,7 +195,7 @@ export async function completeJson(opts) {
   try { return parseJson(text); }
   catch (e) {
     // zweiter Versuch: KI bitten, das JSON zu reparieren
-    const fixed = await complete({ model: 'fast', maxTokens: opts.maxTokens || 4000, json: true, purpose: opts.purpose, budgetExempt: opts.budgetExempt, system: 'Repariere das folgende fehlerhafte JSON. Gib nur das korrigierte JSON aus.', messages: [{ role: 'user', content: text.slice(0, 60000) }] });
+    const fixed = await complete({ model: 'fast', maxTokens: Math.max(opts.maxTokens || 4000, Math.ceil(text.length / 2.5)), json: true, purpose: opts.purpose, budgetExempt: opts.budgetExempt, system: 'Repariere das folgende fehlerhafte JSON. Gib nur das korrigierte JSON aus.', messages: [{ role: 'user', content: text.slice(0, 60000) }] });
     return parseJson(fixed);
   }
 }
