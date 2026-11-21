@@ -344,6 +344,7 @@ export function settingsView(el) {
     if (a === 'scan') { save(); autoUpdate(); toast('Suche läuft im Hintergrund'); }
     if (a === 'testai') {
       save();
+      toast('Teste Verbindung …', 4000);
       const { complete } = await import('./ai.js');
       try { const r = await complete({ model: 'fast', maxTokens: 50, messages: [{ role: 'user', content: 'Antworte nur mit: Verbindung steht.' }] }); toast('✓ ' + r.trim()); }
       catch (err) { toast(err.message, 8000); }

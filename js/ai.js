@@ -117,7 +117,9 @@ async function gemini(key, model, system, messages, maxTokens, json, signal) {
       method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
     });
     if (res.status !== 429 || attempt >= 4) break;
-    await new Promise(r => setTimeout(r, 20000 * (attempt + 1)));
+    const wait = 20 * (attempt + 1);
+    try { window.dispatchEvent(new CustomEvent('ai-status', { detail: `Gemini: kostenloses Kontingent gerade ausgeschöpft – warte ${wait} Sekunden und versuche es erneut …` })); } catch {}
+    await new Promise(r => setTimeout(r, wait * 1000));
   }
   if (!res.ok) throw await httpErr(res, 'Gemini');
   const j = await res.json();

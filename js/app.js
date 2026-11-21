@@ -177,6 +177,8 @@ export function queueProcessing(id) {
   for (const r of sub.rulings) if (r.source === 'upload' && !r.summary && r.status !== 'fehler') runJob('rul:' + r.id, `Urteil „${r.title}“ aufbereiten`, () => summarizeRuling(id, r.id), { subId: id });
 }
 
+window.addEventListener('ai-status', e => toast(e.detail, 8000));
+
 async function start() {
   if (location.hostname.endsWith('.netlify.app')) document.body.classList.add('on-netlify');
   await store.load();
