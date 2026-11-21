@@ -48,7 +48,7 @@ export function emptyState() {
       keys: { anthropic: '', gemini: '', openai: '' },
       models: {
         anthropic: { smart: 'claude-sonnet-5-5', fast: 'claude-haiku-5-5' },
-        gemini: { smart: 'gemini-flash-latest', fast: 'gemini-flash-lite-latest' },
+        gemini: { smart: 'gemini-3.8-flash', fast: 'gemini-3.8-flash' },
         openai: { smart: 'gpt-5', fast: 'gpt-5-mini' }
       },
       risProxy: '',
@@ -119,7 +119,7 @@ function migrate(s) {
   out.settings.keys = { ...base.settings.keys, ...((s.settings || {}).keys || {}) };
   out.settings.models = { ...base.settings.models, ...((s.settings || {}).models || {}) };
   // alte Gemini-Modelle (2.5) gibt es nicht mehr bzw. Pro ist nicht kostenlos – auf die kostenlosen Flash-Modelle umstellen
-  if (/2\.5|pro/.test(JSON.stringify(out.settings.models.gemini || {}))) out.settings.models.gemini = { ...base.settings.models.gemini };
+  if (/2\.5|pro|latest/.test(JSON.stringify(out.settings.models.gemini || {}))) out.settings.models.gemini = { ...base.settings.models.gemini };
   out.progress = { ...base.progress, ...(s.progress || {}) };
   out.cards = s.cards || {};
   out.srs = s.srs || {};
