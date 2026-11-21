@@ -218,7 +218,7 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
       const reqs = work.map(ch => {
         const text = pagesToText(t.pages, ch.startPage, ch.endPage);
         const pr = role === 'faelle' ? casesPrompt(store.subject(subId), book, ch, text) : summaryPrompt(book, ch, text);
-        return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens };
+        return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens, model: 'book' };
       });
       const { id, model } = await submitBatch(reqs);
       patchBook(subId, fileId, b => { b.status = 'hintergrund'; b.batch = { id, model, kind: role === 'faelle' ? 'faelle' : 'summary', at: Date.now(), n: reqs.length }; b.approved = false; });
@@ -340,8 +340,8 @@ const POOL_JSON = `"fragen": [{"frage": "…", "optionen": ["…","…","…","�
 function summaryPrompt(book, ch, text) {
   return {
     maxTokens: 16000,
-    system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du.`,
-    prompt: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y", "ebene": "basis|vertiefung"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl),\n ${POOL_JSON}\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind. Bei pruefungsrelevant=false ist "fragen" leer.\n\n${POOL_RULES}\n\nKAPITELTEXT:\n${clip(text, 320000)}`
+    system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du. Verwende in Texten „ “ statt gerader Anführungszeichen.`,
+    prompt: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON – GENAU in dieser Reihenfolge der Felder (die kurzen Listen zuerst, die ausführlichen Themen zum Schluss):\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "normen": ["§ 1295 ABGB", …],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl),\n "themen": [{"titel": "…", "inhalt": "prüfungsrelevante Darstellung in Markdown mit Seitenangaben – präzise, ohne Wiederholungen", "seiten": "S. x–y", "ebene": "basis|vertiefung"}]\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind. Die gesamte Antwort soll höchstens etwa 25.000 Zeichen lang sein.\n\nKAPITELTEXT:\n${clip(text, 320000)}`
   };
 }
 
@@ -364,7 +364,7 @@ export async function summarizeChapter(subId, fileId, chId, pagesOpt, { budgetEx
   const ch = book.chapters.find(c => c.id === chId);
   const pages = pagesOpt || (await getFileText(sub, fileId)).pages;
   const pr = summaryPrompt(book, ch, pagesToText(pages, ch.startPage, ch.endPage));
-  const r = await completeJson({ model: 'smart', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Lehrbuch zusammenfassen', budgetExempt });
+  const r = await completeJson({ model: 'book', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Lehrbuch zusammenfassen', budgetExempt });
   patchSummary(subId, fileId, chId, r);
   return r;
 }
@@ -392,7 +392,8 @@ function poolPrompt(book, ch, text) {
 }
 export function poolEstimate(book, pages) {
   const prov = store.state.settings.provider || 'anthropic';
-  const model = store.state.settings.models?.[prov]?.smart || 'sonnet';
+  const mm = store.state.settings.models?.[prov] || {};
+  const model = mm.book || mm.smart || 'sonnet';
   const chs = book.chapters.filter(c => isStudyChapter(c) && c.summary && !c.pool?.length);
   let usdSum = 0;
   for (const ch of chs) usdSum += estimate(model, Math.min(30000, pagesToText(pages, ch.startPage, ch.endPage).length) + digest(ch).length + 3000, 4500, { batch: batchAvailable() });
@@ -407,7 +408,7 @@ export async function buildPools(subId, fileId, onStatus = () => {}) {
   if (!chs.length) return;
   if (batchAvailable()) {
     onStatus('Schicke die Kapitel an den Hintergrund-Modus …');
-    const reqs = chs.map(ch => { const pr = poolPrompt(book, ch, pagesToText(t.pages, ch.startPage, ch.endPage)); return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens }; });
+    const reqs = chs.map(ch => { const pr = poolPrompt(book, ch, pagesToText(t.pages, ch.startPage, ch.endPage)); return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens, model: 'book' }; });
     const { id, model } = await submitBatch(reqs);
     patchBook(subId, fileId, b => { b.batch = { id, model, kind: 'pool', at: Date.now(), n: reqs.length }; });
     return;
@@ -416,7 +417,7 @@ export async function buildPools(subId, fileId, onStatus = () => {}) {
   for (const ch of chs) {
     i++; onStatus(`Erstelle Fragenpool (${i} von ${chs.length}): ${ch.title}`);
     const pr = poolPrompt(book, ch, pagesToText(t.pages, ch.startPage, ch.endPage));
-    try { const r = await completeJson({ model: 'smart', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Fragenpool', budgetExempt: true }); patchPool(subId, fileId, ch.id, r.fragen); }
+    try { const r = await completeJson({ model: 'book', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Fragenpool', budgetExempt: true }); patchPool(subId, fileId, ch.id, r.fragen); }
     catch (e) { console.warn(e); if (/401|403|credit|guthaben|api key|billing/i.test(e.message)) throw e; }
   }
 }
@@ -427,9 +428,10 @@ function patchPool(subId, fileId, chId, list) {
 // Kostenvoranschlag für die noch offenen Kapitel eines Buchs
 export function estimateWork(book, chapters, pages, batch) {
   const prov = store.state.settings.provider || 'anthropic';
-  const model = store.state.settings.models?.[prov]?.smart || 'sonnet';
+  const mm = store.state.settings.models?.[prov] || {};
+  const model = mm.book || mm.smart || 'sonnet';
   let usdSum = 0, chars = 0;
-  const outPer = bookRole(book) === 'faelle' ? 6000 : 7500; // inkl. Fragenpool
+  const outPer = bookRole(book) === 'faelle' ? 9000 : 8000;
   for (const ch of chapters) {
     const c = pagesToText(pages, ch.startPage, ch.endPage).length;
     chars += c;
@@ -452,6 +454,7 @@ export async function pollBatches(onDone = () => {}) {
       try { results = await batchResults(b.batch.id, b.batch.model); } catch (e) { console.warn(e); continue; }
       let ok = 0, failed = 0;
       let firstErr = '';
+      const doneKind = b.batch.kind;
       for (const r of results) {
         if (!r.ok) { failed++; firstErr = firstErr || r.error || ''; continue; }
         let j; try { j = parseJson(r.text); } catch (e) { failed++; firstErr = firstErr || 'Antwort nicht lesbar: ' + e.message; continue; }
@@ -470,6 +473,8 @@ export async function pollBatches(onDone = () => {}) {
         if (left) x.error = `${left} Kapitel konnten nicht verarbeitet werden${firstErr ? ` (Grund: ${firstErr})` : ''} – mit „Vorbereiten“ erneut versuchen.`;
       });
       onDone(b, ok, failed);
+      // nach den Zusammenfassungen gleich den Fragenpool im Hintergrund nachziehen (günstig)
+      if (doneKind === 'summary' && ok) buildPools(sub.id, b.fileId).catch(e => console.warn('Fragenpool', e));
     }
   }
 }

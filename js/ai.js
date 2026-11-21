@@ -31,7 +31,7 @@ export async function complete({ system = '', messages, model = 'smart', maxToke
   const c = cfg();
   if (!c.key) throw new Error('Kein KI-Schlüssel hinterlegt. Bitte in den Einstellungen eintragen.');
   const sys = system ? BASE_RULES + '\n\n' + system : BASE_RULES;
-  const modelName = c.models[model] || c.models.smart;
+  const modelName = c.models[model] || (model === 'book' ? c.models.fast : null) || c.models.smart;
   // Kostenbremse: vorab schätzen und bei erreichtem Limit nachfragen
   const inChars = sys.length + messages.reduce((a, m) => a + String(m.content || '').length, 0);
   if (!budgetExempt) await checkBudget(estimate(modelName, inChars, Math.round(maxTokens * 0.4)), purpose);
@@ -223,7 +223,7 @@ export async function submitBatch(reqs) {
   const c = cfg();
   const requests = reqs.map(r => {
     const sys = BASE_RULES + '\n\n' + (r.system || '') + '\n\nAntworte AUSSCHLIESSLICH mit gültigem JSON ohne erklärenden Text davor oder danach.';
-    return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || c.models.smart, max_tokens: r.maxTokens || 8000, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.prompt }] } };
+    return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || (r.model === 'book' ? c.models.fast : null) || c.models.smart, max_tokens: r.maxTokens || 8000, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.prompt }] } };
   });
   const res = await fetch(batchUrl('messages/batches'), { method: 'POST', headers: AH(c.key), body: JSON.stringify({ requests }) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
