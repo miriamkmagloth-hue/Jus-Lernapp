@@ -164,6 +164,11 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
 
     try { await detectBookTitle(subId, fileId); } catch (e) { console.warn('Titel nicht erkannt', e); }
     let book = store.subject(subId).books.find(b => b.fileId === fileId);
+    // Alte Gliederung ohne erkennbare Fehler behalten (bereits bezahlte Ergebnisse nicht verwerfen)
+    if (book.chapters?.length && book.structVer !== STRUCT_VER && book.chapters.some(c => c.summary || c.cases) && !checkChapters(book.chapters.map(c => ({ id: c.id, title: c.title, start: c.startPage, end: c.endPage })), t.pages).length) {
+      patchBook(subId, fileId, b => { b.structVer = STRUCT_VER; });
+      book = store.subject(subId).books.find(b => b.fileId === fileId);
+    }
     if (!book.chapters?.length || book.structVer !== STRUCT_VER) {
       onStatus('Erkenne Kapitel …');
       const chapters = await detectChapters(t.pages, t.outline);
@@ -840,7 +845,10 @@ export function markDuplicates(subId) {
   for (const list of groups.values()) {
     if (list.length < 2) continue;
     const mt = b => Date.parse(sub.files[b.fileId]?.modifiedTime || 0) || 0;
-    const keep = [...list].sort((a, b) => editionNo(b) - editionNo(a) || mt(b) - mt(a))[0];
+    // neueste Auflage; bei Gleichstand: Datei im Ordner „Neue Auflagen“ bzw. eine, die schon gelesen werden konnte
+    const neu = b => /neu/i.test(sub.files[b.fileId]?.path || '') ? 1 : 0;
+    const ok = b => (b.chapters?.length ? 1 : 0);
+    const keep = [...list].sort((a, b) => editionNo(b) - editionNo(a) || neu(b) - neu(a) || ok(b) - ok(a) || mt(b) - mt(a))[0];
     for (const b of list) changes.push([b.fileId, b === keep ? null : keep.fileId]);
   }
   if (!changes.some(([fid, dup]) => (sub.books.find(b => b.fileId === fid).dupOf || null) !== dup)) return;
