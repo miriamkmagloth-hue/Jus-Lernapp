@@ -872,3 +872,37 @@ export async function prepareRulings(subId, onStatus = () => {}) {
     });
   }
 }
+
+
+// ---------- Fach-Chat: passende Stellen aus allen Lehrbüchern und Einheiten heraussuchen (lokal, kostenlos) ----------
+const STOP = new Set('aber alle also auch dass dann dass denn dein dem den der des die dies diese dieser doch durch eine einem einen einer eines erst etwa für gibt habe haben hast hier immer ist jetzt kann kannst mein mich mir mit nach nicht noch nur oder schon sein sich sie sind über und uns unter vom von war was weil wenn werden wie wird wir zum zur bitte erkläre erklär mal genau frage fragen thema kapitel buch unterschied zwischen welche welcher welches warum wann wieso'.split(' '));
+const terms = q => [...new Set(String(q).toLowerCase().replace(/§\s*(\d+)/g, ' §$1 ').split(/[^a-zäöüß0-9§]+/).filter(w => (w.length > 3 || /^§\d+/.test(w)) && !STOP.has(w)).map(w => w.length > 8 && !w.startsWith('§') ? w.slice(0, 7) : w))]; // grobe Wortstämme
+
+export async function subjectContext(subId, question, maxChars = 45000) {
+  const sub = store.subject(subId);
+  const qs = terms(question);
+  const passages = [];
+  for (const b of sub.books) {
+    if (bookRole(b) === 'aus' || !b.chapters?.length) continue;
+    let t;
+    try { t = await getFileText(sub, b.fileId); } catch { continue; }
+    if (!t?.pages) continue;
+    for (const c of b.chapters) {
+      if (!isStudyChapter(c)) continue;
+      for (let n = c.startPage; n <= c.endPage; n++) {
+        const p = t.pages[n - 1]; if (!p) continue;
+        const low = p.text.toLowerCase();
+        let score = 0;
+        for (const w of qs) { const k = low.split(w).length - 1; if (k) score += 1 + Math.log(1 + k) + (c.title.toLowerCase().includes(w) ? 2 : 0); }
+        if (score > 0) passages.push({ score, text: p.text, label: p.label, book: b.title, chapter: c.title });
+      }
+    }
+  }
+  passages.sort((a, b) => b.score - a.score);
+  let used = 0;
+  const picked = [];
+  for (const p of passages) { if (used + p.text.length > maxChars) break; picked.push(p); used += p.text.length; }
+  const units = (sub.units || []).filter(u => u.analysis).map(u => `- ${u.title}: ${u.analysis.thema || ''} – ${(u.analysis.profBetont || []).map(x => x.hinweis).join('; ').slice(0, 400)}`).join('\n');
+  const toc = sub.books.filter(b => bookRole(b) !== 'aus' && b.chapters?.length).map(b => `${b.title}: ${b.chapters.filter(isStudyChapter).map(c => c.title.replace(/^\d+\.\s*Kapitel:\s*/, '')).join(' | ')}`).join('\n');
+  return { text: picked.map(p => `[${p.book} – ${p.chapter}, S. ${p.label}]\n${p.text}`).join('\n\n'), units, toc, n: picked.length };
+}

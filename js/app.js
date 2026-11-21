@@ -174,7 +174,7 @@ export function queueProcessing(id) {
   // Bücher, die schon verarbeitet sind: echten Titel nachträglich erkennen
   for (const b of sub.books) if (!b.titleDetected && !b.titleManual && bookRole(b) !== 'aus' && !books.includes(b)) runJob('title:' + b.fileId, `Buchtitel von „${b.title}“ erkennen`, () => detectBookTitle(id, b.fileId), { subId: id });
   for (const b of books) runJob('book:' + b.fileId, `${{ nachschlag: 'Nachschlagewerk', faelle: 'Fallsammlung' }[bookRole(b)] || 'Lehrbuch'} „${b.title}“ ${bookRole(b) === 'nachschlag' ? 'einlesen' : 'verarbeiten'}`, st => processBook(id, b.fileId, st), { subId: id });
-  for (const u of sub.units) if (!u.analysis && u.status !== 'fehler') runJob('unit:' + u.fileId, `Einheit „${u.title}“ analysieren`, st => analyzeUnit(id, u.fileId, st), { subId: id });
+  for (const u of sub.units) if (!u.analysis && (u.status !== 'fehler' || /fetch|netzwerk|verbindung|zeitüberschreitung|limit|gemini/i.test(u.error || ''))) runJob('unit:' + u.fileId, `Einheit „${u.title}“ analysieren`, st => analyzeUnit(id, u.fileId, st), { subId: id });
   for (const k of sub.altklausuren) if (!k.analysis && k.status !== 'fehler') runJob('alt:' + k.fileId, `Altklausur „${k.title}“ analysieren`, st => analyzeAltklausur(id, k.fileId, st), { subId: id });
   for (const r of sub.rulings) if (r.source === 'upload' && !r.summary && r.status !== 'fehler') runJob('rul:' + r.id, `Urteil „${r.title}“ aufbereiten`, () => summarizeRuling(id, r.id), { subId: id });
 }

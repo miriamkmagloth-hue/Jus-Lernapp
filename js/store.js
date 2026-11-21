@@ -143,7 +143,8 @@ export function normalizeSubject(sub) {
     altOverview: sub.altOverview || null,
     rulings: sub.rulings || [],
     rulingMeta: sub.rulingMeta || { lastCheck: null, norms: [] },
-    lastScan: sub.lastScan || null
+    lastScan: sub.lastScan || null,
+    chat: Array.isArray(sub.chat) ? sub.chat.slice(-60) : []
   };
 }
 

@@ -4,13 +4,13 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
 import { isSignedIn } from './drive.js';
 
-const TABS = [['plan', 'Übersicht'], ['stoff', 'Lehrbuch'], ['einheiten', 'Einheiten'], ['falltraining', 'Falltraining'], ['altklausuren', 'Altklausuren'], ['ogh', 'OGH-Urteile'], ['muendlich', 'Mündlich'], ['dateien', 'Dateien']];
+const TABS = [['plan', 'Übersicht'], ['chat', 'Chat'], ['stoff', 'Lehrbuch'], ['einheiten', 'Einheiten'], ['falltraining', 'Falltraining'], ['altklausuren', 'Altklausuren'], ['ogh', 'OGH-Urteile'], ['muendlich', 'Mündlich'], ['dateien', 'Dateien']];
 
 export function renderJobBar(bar) {
   const subId = bar.dataset.jobs;
@@ -68,7 +68,7 @@ export function subjectView(el, subId, tab = 'plan') {
   el.innerHTML = header(sub, tab) + '<div id="tabBody"></div>';
   mountJobBar(el);
   const body = el.querySelector('#tabBody');
-  ({ plan: tabPlan, stoff: tabStoff, einheiten: tabUnits, falltraining: tabCases, altklausuren: tabAlt, ogh: tabOgh, muendlich: tabOral, dateien: tabFiles }[tab] || tabPlan)(body, sub);
+  ({ plan: tabPlan, chat: tabChat, stoff: tabStoff, einheiten: tabUnits, falltraining: tabCases, altklausuren: tabAlt, ogh: tabOgh, muendlich: tabOral, dateien: tabFiles }[tab] || tabPlan)(body, sub);
 }
 
 // ---------- Übersicht ----------
@@ -125,6 +125,35 @@ function tabPlan(el, sub) {
     else if (!currentAttempt(store.subject(sub.id).exams.find(x => x.id === b.dataset.ex))) { render(); return; }
     else toast(currentAttempt(store.subject(sub.id).exams.find(x => x.id === b.dataset.ex)) ? 'Der Plan rechnet jetzt mit dem Ersatztermin. Dein Lernstand bleibt erhalten.' : 'Trag einen Ersatztermin ein, dann plant die App weiter.', 5000);
     render();
+  });
+}
+
+// ---------- Chat über den gesamten Stoff ----------
+function tabChat(el, sub) {
+  const ref = store.subject(sub.id);
+  el.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">Frag alles zum Stoff dieses Fachs. Die App sucht dafür die passenden Stellen aus allen Lehrbüchern heraus – du musst nichts vorher zusammenfassen. Antworten mit Seitenangaben.</p><div id="fchat"></div></div>`;
+  mountChat(el.querySelector('#fchat'), {
+    history: ref.chat,
+    onSave: () => store.update(s => { const x = s.subjects.find(y => y.id === sub.id); x.chat = ref.chat.slice(-60); }, { silent: true }),
+    maxTokens: 2500,
+    purpose: 'Fach-Chat',
+    system: async () => {
+      const lastUser = [...ref.chat].reverse().filter(m => m.role === 'user').slice(0, 2).map(m => m.content).join(' ');
+      const ctx = await subjectContext(sub.id, lastUser);
+      return `Du bist Lerncoach für das Fach „${sub.name}“ (österreichisches Recht). Beantworte Fragen auf Grundlage der LEHRBUCHAUSZÜGE unten und gib die Fundstelle an (Buch, S. x). Steht etwas nicht in den Auszügen, sag das ehrlich und nenne, in welchem Kapitel laut Inhaltsübersicht es vermutlich steht. Erfinde nichts. Wenn die Studentin abgefragt werden will: eine Frage nach der anderen, auf die Antwort warten, dann Feedback. Keine Fragen nach Paragraphennummern oder Gliederung. Bei Fällen: Anspruchsprüfung (Wer will was von wem woraus?).
+
+INHALTSÜBERSICHT DER BÜCHER:
+${ctx.toc}
+${ctx.units ? `\nIN DEN EINHEITEN BETONT:\n${ctx.units}\n` : ''}
+LEHRBUCHAUSZÜGE (passend zur Frage ausgewählt):
+${ctx.text || '(keine passenden Stellen gefunden)'}`;
+    },
+    placeholder: 'Frage zum Stoff …',
+    emptyText: 'Z. B. „Was ist der Unterschied zwischen Gewährleistung und Schadenersatz?“ oder „Frag mich zum Verzug ab“.',
+    quickPrompts: [
+      { label: 'Frag mich ab', prompt: 'Frag mich zu einem wichtigen Thema dieses Fachs ab: eine Frage nach der anderen, wie in einer Prüfung.' },
+      { label: 'Kleiner Fall', prompt: 'Gib mir einen kurzen Klausurfall zu einem zentralen Thema. Ich löse ihn, dann korrigierst du mich nach der Anspruchsprüfung.' }
+    ]
   });
 }
 
