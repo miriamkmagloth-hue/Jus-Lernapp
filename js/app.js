@@ -2,7 +2,7 @@
 import { STRUCT_VER, markDuplicates } from './processing.js';
 import { store, local, bookRole, bookInExam, isStudyChapter } from './store.js';
 import { openLaw } from './law.js';
-import { signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, canStaySignedIn } from './drive.js';
+import { serverAuthInfo, signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, canStaySignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
 import { applyTheme } from './theme.js';
@@ -184,6 +184,8 @@ window.addEventListener('ai-status', e => toast(e.detail, 8000));
 async function start() {
   if (location.hostname.endsWith('.netlify.app')) document.body.classList.add('on-netlify');
   await store.load();
+  // Client-ID kommt vom Server (Vercel) – auf jedem neuen Gerät automatisch, ohne Eintippen
+  try { await serverAuthInfo(); } catch {}
   applyTheme();
   let lastDesign = JSON.stringify(store.state.settings.design || {});
   store.on(st => { const d = JSON.stringify(st.settings.design || {}); if (d !== lastDesign) { lastDesign = d; applyTheme(); } });

@@ -27,8 +27,10 @@ export function dashboard(el) {
   const st = store.state;
   const missing = setupNeeded();
   let html = '';
-  if (missing.length) html += `<div class="notice gold"><strong>Einrichtung fehlt noch:</strong> ${missing.map(esc).join(', ')}.<br><a href="#/einrichtung">Zur Schritt-für-Schritt-Anleitung →</a></div>`;
-  else if (!isSignedIn()) html += `<div class="notice"><div class="row between"><span>Mit Google Drive verbinden, um Unterlagen zu laden und zu synchronisieren.</span><button class="btn small" data-a="login">Verbinden</button></div></div>`;
+  // Neues Gerät: erst mit Google verbinden – Schlüssel und Daten kommen dann aus Google Drive
+  if (!isSignedIn() && local.googleClientId) html += `<div class="notice"><div class="row between"><span>Mit Google verbinden – deine Fächer, Zusammenfassungen und Einstellungen kommen dann automatisch aus Google Drive.</span><button class="btn small" data-a="login">Mit Google verbinden</button></div></div>`;
+  else if (missing.length) html += `<div class="notice gold"><strong>Einrichtung fehlt noch:</strong> ${missing.map(esc).join(', ')}.<br><a href="#/einrichtung">Zur Schritt-für-Schritt-Anleitung →</a></div>`;
+  else if (!isSignedIn() && !local.googleClientId) html += `<div class="notice"><div class="row between"><span>Mit Google Drive verbinden, um Unterlagen zu laden und zu synchronisieren.</span><button class="btn small" data-a="login">Verbinden</button></div></div>`;
 
   if (!st.subjects.length) {
     html += `<div class="card empty"><h2>Willkommen!</h2><p>Leg dein erstes Fach an. Die App fragt dich dabei, welche Prüfungen es gibt und wo in Google Drive die Unterlagen liegen.</p><a class="btn" href="#/fach/neu">+ Fach anlegen</a></div>`;
