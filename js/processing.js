@@ -222,8 +222,11 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
     }
     // ohne Hintergrund-Modus: Kapitel für Kapitel (freigegeben, daher ohne Limit-Rückfrage)
     let i = 0, failed = 0, lastErr = '';
+    const startProvider = store.state.settings.provider;
     for (const ch of work) {
       i++;
+      // Anbieter gewechselt (z. B. von kostenlos auf kostenpflichtig)? Dann sofort anhalten – nie ohne Freigabe Geld ausgeben
+      if (store.state.settings.provider !== startProvider) { patchBook(subId, fileId, b => { b.status = 'gegliedert'; b.approved = false; b.estimate = null; }); onStatus('angehalten – KI-Anbieter wurde gewechselt'); return; }
       const cur = store.subject(subId).books.find(b => b.fileId === fileId);
       if (!cur || bookRole(cur) !== role) { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
       onStatus(`${role === 'faelle' ? 'Löse Fälle heraus' : 'Fasse zusammen'} (${i} von ${work.length}): ${ch.title}`);
