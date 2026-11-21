@@ -4,7 +4,7 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
@@ -50,6 +50,14 @@ function bookAction(b, job) {
 
 function bookNotes(b, sub) {
   let h = '';
+  const study = b.chapters.filter(c => isStudyChapter(c) && c.summary);
+  const noPool = study.filter(c => !c.pool?.length).length;
+  const pj = jobs.get('pool:' + b.fileId);
+  if (study.length && !b.batch) {
+    h += noPool ? `<div class="notice gold small" style="margin-top:8px">🎯 <strong>Fragenpool</strong>: ${study.length - noPool} von ${study.length} Kapiteln haben schon feste Prüfungsfragen. Für die übrigen ${noPool} einmalig erstellen – danach sind Multiple Choice und Einstufungstest <strong>kostenlos und beliebig oft</strong> möglich.
+      <div style="margin-top:6px">${pj && !pj.done ? `<span class="spinner"></span> ${esc(pj.status)}` : `<button class="btn small" data-pool="${b.fileId}">Fragenpool erstellen</button>`}</div></div>`
+      : `<div class="small muted" style="margin-top:6px">🎯 Fragenpool vollständig – Multiple Choice und Einstufung kosten bei diesem Buch nichts.</div>`;
+  }
   if (b.notice) h += `<div class="notice small" style="margin-top:8px">${esc(b.notice)}</div>`;
   if (b.structWarn?.length) h += `<div class="notice err small" style="margin-top:8px">⚠️ Kapitelerkennung unsicher: ${b.structWarn.map(esc).join(' · ')}. Bitte nicht freigeben.</div>`;
   return h;
@@ -225,6 +233,17 @@ function tabStoff(el, sub) {
     if (!ok) return;
     store.update(s => { const x = s.subjects.find(y => y.id === sub.id).books.find(y => y.fileId === fid); x.approved = true; x.error = null; });
     runJob('book:' + fid, `„${b.title}“ ${bookRole(b) === 'faelle' ? 'aufbereiten' : 'zusammenfassen'}`, st => processBook(sub.id, fid, st), { subId: sub.id });
+    render();
+  });
+  el.querySelectorAll('[data-pool]').forEach(btn => btn.onclick = async () => {
+    const fid = btn.dataset.pool;
+    const b = sub.books.find(x => x.fileId === fid);
+    btn.disabled = true; btn.textContent = 'Berechne Kosten …';
+    let est;
+    try { est = poolEstimate(b, (await getFileText(sub, fid)).pages); } catch (e) { toast(e.message, 6000); render(); return; }
+    const ok = await confirmDialog(`Fragenpool für ${est.chapters} Kapitel von „${b.title}“ erstellen – einmalig ca. ${est.usd.toLocaleString('de-AT', { minimumFractionDigits: 2 })} $ von deinem Claude-Guthaben (Hintergrund-Modus, halber Preis). Danach kosten Multiple Choice und Einstufung bei diesem Buch nichts mehr.`, 'Ja, erstellen');
+    if (!ok) { render(); return; }
+    runJob('pool:' + fid, `Fragenpool für „${b.title}“`, st => buildPools(sub.id, fid, st), { subId: sub.id });
     render();
   });
   el.querySelectorAll('[data-cancelbatch]').forEach(btn => btn.onclick = async () => {

@@ -24,13 +24,37 @@ function summaryDigest(c) {
   return `## ${c.title} [ID ${c.id}]\n${s.kurzfassung}\n${(s.themen || []).map(t => `### ${t.titel}\n${t.inhalt}`).join('\n')}\nDefinitionen: ${(s.definitionen || []).map(d => d.begriff + ': ' + d.definition).join(' | ')}\nStolperfallen: ${(s.stolperfallen || []).map(x => x.text || x).join(' | ')}`;
 }
 
+// ======================= Fragenpool (einmal erstellt, danach kostenlos) =======================
+const poolOf = (sub, id) => findChapter(sub, id)?.chapter.pool || [];
+export function hasPool(sub, ids) { return ids.length > 0 && ids.every(id => poolOf(sub, id).length >= 6); }
+// Fragen aus dem Pool ziehen – bevorzugt solche, die du seltener gesehen hast
+export function pickFromPool(sub, ids, nBasis, nVert) {
+  const seen = store.state.progress.poolSeen || {};
+  const take = (list, n) => shuffle(list).sort((a, b) => (seen[a.key] || 0) - (seen[b.key] || 0)).slice(0, n);
+  const all = ids.flatMap(id => poolOf(sub, id).map((q, i) => ({ ...q, kapitelId: id, key: id + ':' + i })));
+  const per = (list, n) => ids.length > 1 ? ids.flatMap(id => take(list.filter(q => q.kapitelId === id), Math.ceil(n / ids.length))).slice(0, n) : take(list, n);
+  let qs = [...per(all.filter(q => q.ebene !== 'vertiefung'), nBasis), ...per(all.filter(q => q.ebene === 'vertiefung'), nVert)];
+  if (qs.length < nBasis + nVert) qs = [...qs, ...take(all.filter(q => !qs.includes(q)), nBasis + nVert - qs.length)];
+  store.update(s => { const ps = s.progress.poolSeen ||= {}; qs.forEach(q => { ps[q.key] = (ps[q.key] || 0) + 1; }); }, { silent: true });
+  return qs.map(q => ({ ...q, opts: shuffle(q.optionen.map((o, i) => ({ text: o, ok: i === q.richtig }))) }));
+}
+
 // ======================= Multiple Choice =======================
 export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
   const start = () => {
     el.innerHTML = `<div class="card"><h3>Multiple-Choice-Test</h3><p class="small muted">${count} Fragen aus dem Lehrbuchtext${title ? ' zu „' + esc(title) + '“' : ''}. Jede Antwort mit Erklärung und Seitenangabe.</p>
       <label class="field"><span>Was möchtest du üben?</span><select id="lvl"><option value="gemischt">Gemischt (vor allem Basis, etwas Vertiefung)</option><option value="basis">Basiswissen (muss sitzen)</option><option value="vertiefung">Vertiefung / Spezialwissen (schwer)</option></select></label>
-      <button class="btn" data-a="go">Test erstellen</button></div>`;
+      ${hasPool(sub, chapterIds) ? `<button class="btn" data-a="pool">Test starten – aus dem Fragenpool (kostenlos)</button>
+        <div style="margin-top:8px"><button class="btn ghost small" data-a="go">Ganz neue Fragen von der KI erstellen lassen (kostet ein paar Cent)</button></div>` : `<button class="btn" data-a="go">Test erstellen</button>
+        <p class="tiny muted" style="margin-top:6px">Für dieses Kapitel gibt es noch keinen kostenlosen Fragenpool – die Fragen werden jetzt von der KI erstellt (ein paar Cent).</p>`}</div>`;
     el.querySelector('[data-a=go]').onclick = () => generate(el.querySelector('#lvl').value);
+    const pb = el.querySelector('[data-a=pool]');
+    if (pb) pb.onclick = () => {
+      const lvl = el.querySelector('#lvl').value;
+      const nv = lvl === 'basis' ? 0 : lvl === 'vertiefung' ? count : Math.round(count * 0.3);
+      noRerender(el);
+      run(pickFromPool(sub, chapterIds, count - nv, nv));
+    };
   };
   const generate = async level => {
     noRerender(el);
@@ -471,6 +495,8 @@ const PRECISION = `Anforderungen an jede Frage:
 
 let lastRaw = '';
 async function makeQuestions(sub, chapters, per) {
+  // vorhandener Fragenpool → kostenlos, ohne KI
+  if (hasPool(sub, chapters.map(c => c.id))) return chapters.flatMap(c => pickFromPool(sub, [c.id], per.basis, per.vert));
   let material = '';
   for (const c of chapters) {
     let t = '';

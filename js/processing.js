@@ -324,11 +324,19 @@ async function detectChaptersAI(pages, toc) {
   return out;
 }
 
+// Regeln für den festen Fragenpool (einmal erstellt, danach kostenlos beliebig oft nutzbar)
+export const POOL_RULES = `FRAGENPOOL: Erstelle 12 Multiple-Choice-Fragen zum BASISWISSEN (davon mind. 3 Anwendungen auf einen Mini-Sachverhalt bzw. ein Prüfungsschema) und 6 zur VERTIEFUNG.
+- Jede Frage prüft das VERSTÄNDNIS eines anderen prüfungsrelevanten Punkts; nie Paragraphennummern, Gliederung, Überschriften oder Seitenzahlen abfragen.
+- Je 4 Optionen, genau eine eindeutig richtig; die falschen sind plausible, typische Fehlvorstellungen; Optionen ungefähr gleich lang; keine „alle/keine der genannten“.
+- Erklärung: max. 2 Sätze, warum richtig (und warum die häufigste Verwechslung falsch ist), mit Seitenangabe.
+- Verwende in Texten „ “ oder ' statt gerader Anführungszeichen.`;
+const POOL_JSON = `"fragen": [{"frage": "…", "optionen": ["…","…","…","…"], "richtig": 0, "erklaerung": "…", "seite": "S. …", "ebene": "basis|vertiefung"}]`;
+
 function summaryPrompt(book, ch, text) {
   return {
-    maxTokens: 9000,
+    maxTokens: 16000,
     system: `Du erstellst prüfungsorientierte Lernzusammenfassungen eines Lehrbuchkapitels. Verwende NUR den Kapiteltext. Nichts hinzufügen, nichts Wesentliches weglassen. Jede Aussage mit Seitenangabe [S. x]. Fasse nur den juristischen Inhalt zusammen; Inhaltsverzeichnisse, Gliederungsübersichten, Vorworte, Literatur- und Abkürzungsverzeichnisse, Kopfzeilen und Randziffern ignorierst du.`,
-    prompt: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y", "ebene": "basis|vertiefung"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl)\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind.\n\nKAPITELTEXT:\n${clip(text, 320000)}`
+    prompt: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nErstelle eine strukturierte Zusammenfassung als JSON:\n{\n "pruefungsrelevant": true, (false NUR wenn der Text kein juristischer Lernstoff ist, z. B. reines Inhaltsverzeichnis, Vorwort, Verzeichnisse, Register)\n "kurzfassung": "3–6 Sätze: worum geht es inhaltlich (Rechtsinstitute, Probleme), nicht wie das Kapitel aufgebaut ist",\n "themen": [{"titel": "…", "inhalt": "ausführliche, prüfungsrelevante Darstellung in Markdown mit Seitenangaben", "seiten": "S. x–y", "ebene": "basis|vertiefung"}],\n "definitionen": [{"begriff": "…", "definition": "…", "seite": "…", "ebene": "basis|vertiefung"}],\n "normen": ["§ 1295 ABGB", …],\n "stolperfallen": [{"text": "typische Fehler, Abgrenzungen, Ausnahmen", "seite": "…"}],\n "schemata": [{"titel": "Prüfungsschema …", "schritte": ["…"]}],\n "entscheidungen": ["im Text zitierte OGH-Entscheidungen, z. B. 1 Ob 123/05x"],\n "schlagworte": ["…"],\n "lernzeitMinuten": realistische Lernzeit für jemanden ohne Vorwissen (Zahl),\n ${POOL_JSON}\n}\nLeere Listen sind erlaubt. Gib Schemata nur an, wenn sie im Text angelegt sind. Bei pruefungsrelevant=false ist "fragen" leer.\n\n${POOL_RULES}\n\nKAPITELTEXT:\n${clip(text, 320000)}`
   };
 }
 
@@ -336,7 +344,12 @@ function patchSummary(subId, fileId, chId, r) {
   store.update(s => {
     const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId);
     const c = b.chapters.find(x => x.id === chId);
-    if (c) { c.summary = r; c.status = 'fertig'; c.summarizedAt = Date.now(); }
+    if (c) {
+      const pool = Array.isArray(r?.fragen) ? r.fragen : null;
+      if (r) delete r.fragen;
+      c.summary = r; c.status = 'fertig'; c.summarizedAt = Date.now();
+      if (pool?.length) c.pool = cleanPool(pool);
+    }
   });
 }
 
@@ -351,12 +364,67 @@ export async function summarizeChapter(subId, fileId, chId, pagesOpt, { budgetEx
   return r;
 }
 
+// Fragenpool säubern: nur vollständige Fragen mit 4 Optionen und gültiger Lösung
+export function cleanPool(list) {
+  return (list || []).map(q => {
+    const optionen = (q.optionen || q.options || []).map(o => typeof o === 'object' ? (o.text || '') : String(o)).map(o => o.replace(/^\s*[A-Da-d][).:]\s+/, '')).filter(Boolean);
+    let richtig = q.richtig;
+    if (typeof richtig === 'string') richtig = /^[A-D]$/i.test(richtig.trim()) ? 'ABCD'.indexOf(richtig.trim().toUpperCase()) : parseInt(richtig, 10);
+    return { frage: q.frage, optionen, richtig, erklaerung: q.erklaerung || '', seite: q.seite || '', ebene: String(q.ebene || 'basis').startsWith('vert') ? 'vertiefung' : 'basis' };
+  }).filter(q => q.frage && q.optionen.length >= 3 && Number.isInteger(q.richtig) && q.richtig >= 0 && q.richtig < q.optionen.length);
+}
+
+function digest(c) {
+  const s = c.summary || {};
+  return `${s.kurzfassung || ''}\n${(s.themen || []).map(t => `### ${t.titel}\n${t.inhalt}`).join('\n')}\nDefinitionen: ${(s.definitionen || []).map(d => d.begriff + ': ' + d.definition).join(' | ')}\nStolperfallen: ${(s.stolperfallen || []).map(x => x.text || x).join(' | ')}`;
+}
+function poolPrompt(book, ch, text) {
+  return {
+    maxTokens: 8000,
+    system: 'Du erstellst einen festen Pool präziser Multiple-Choice-Prüfungsfragen zu einem Lehrbuchkapitel (österreichisches Recht). Grundlage ist ausschließlich das Kapitel.',
+    prompt: `Lehrbuch: „${book.title}“, Kapitel: „${ch.title}“\n\n${POOL_RULES}\n\nJSON: {${POOL_JSON}}\n\nZUSAMMENFASSUNG DES KAPITELS:\n${digest(ch)}\n\nAUSZUG AUS DEM LEHRBUCHTEXT:\n${clip(text, 30000)}`
+  };
+}
+export function poolEstimate(book, pages) {
+  const prov = store.state.settings.provider || 'anthropic';
+  const model = store.state.settings.models?.[prov]?.smart || 'sonnet';
+  const chs = book.chapters.filter(c => isStudyChapter(c) && c.summary && !c.pool?.length);
+  let usdSum = 0;
+  for (const ch of chs) usdSum += estimate(model, Math.min(30000, pagesToText(pages, ch.startPage, ch.endPage).length) + digest(ch).length + 3000, 4500, { batch: batchAvailable() });
+  return { usd: Math.round(usdSum * 100) / 100, chapters: chs.length };
+}
+// Fragenpool für schon zusammengefasste Kapitel nachträglich erstellen (Hintergrund-Modus)
+export async function buildPools(subId, fileId, onStatus = () => {}) {
+  const sub = store.subject(subId);
+  const book = sub.books.find(b => b.fileId === fileId);
+  const t = await getFileText(sub, fileId);
+  const chs = book.chapters.filter(c => isStudyChapter(c) && c.summary && !c.pool?.length);
+  if (!chs.length) return;
+  if (batchAvailable()) {
+    onStatus('Schicke die Kapitel an den Hintergrund-Modus …');
+    const reqs = chs.map(ch => { const pr = poolPrompt(book, ch, pagesToText(t.pages, ch.startPage, ch.endPage)); return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens }; });
+    const { id, model } = await submitBatch(reqs);
+    patchBook(subId, fileId, b => { b.batch = { id, model, kind: 'pool', at: Date.now(), n: reqs.length }; });
+    return;
+  }
+  let i = 0;
+  for (const ch of chs) {
+    i++; onStatus(`Erstelle Fragenpool (${i} von ${chs.length}): ${ch.title}`);
+    const pr = poolPrompt(book, ch, pagesToText(t.pages, ch.startPage, ch.endPage));
+    try { const r = await completeJson({ model: 'smart', maxTokens: pr.maxTokens, system: pr.system, messages: [{ role: 'user', content: pr.prompt }], purpose: 'Fragenpool', budgetExempt: true }); patchPool(subId, fileId, ch.id, r.fragen); }
+    catch (e) { console.warn(e); if (/401|403|credit|guthaben|api key|billing/i.test(e.message)) throw e; }
+  }
+}
+function patchPool(subId, fileId, chId, list) {
+  store.update(s => { const c = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId).chapters.find(x => x.id === chId); if (c) c.pool = cleanPool(list); });
+}
+
 // Kostenvoranschlag für die noch offenen Kapitel eines Buchs
 export function estimateWork(book, chapters, pages, batch) {
   const prov = store.state.settings.provider || 'anthropic';
   const model = store.state.settings.models?.[prov]?.smart || 'sonnet';
   let usdSum = 0, chars = 0;
-  const outPer = bookRole(book) === 'faelle' ? 6000 : 3500;
+  const outPer = bookRole(book) === 'faelle' ? 6000 : 7500; // inkl. Fragenpool
   for (const ch of chapters) {
     const c = pagesToText(pages, ch.startPage, ch.endPage).length;
     chars += c;
@@ -381,15 +449,18 @@ export async function pollBatches(onDone = () => {}) {
       let firstErr = '';
       for (const r of results) {
         if (!r.ok) { failed++; firstErr = firstErr || r.error || ''; continue; }
-        let j; try { j = parseJson(r.text); } catch { failed++; continue; }
+        let j; try { j = parseJson(r.text); } catch (e) { failed++; firstErr = firstErr || 'Antwort nicht lesbar: ' + e.message; continue; }
+        if (b.batch.kind === 'pool') { patchPool(sub.id, b.fileId, r.id, j.fragen); ok++; continue; }
         if (b.batch.kind === 'faelle') patchCases(sub.id, b.fileId, r.id, (j.faelle || []).filter(f => f && (f.sachverhalt || f.loesung)));
         else patchSummary(sub.id, b.fileId, r.id, j);
         ok++;
       }
       store.update(s => {
         const x = s.subjects.find(y => y.id === sub.id).books.find(y => y.fileId === b.fileId);
-        const left = x.chapters.filter(c => isStudyChapter(c) && (b.batch.kind === 'faelle' ? !c.cases : !c.summary)).length;
+        const left = x.chapters.filter(c => isStudyChapter(c) && (b.batch.kind === 'pool' ? c.summary && !c.pool?.length : b.batch.kind === 'faelle' ? !c.cases : !c.summary)).length;
+        const kind = b.batch.kind;
         x.batch = null; x.estimate = null;
+        if (kind === 'pool') { x.error = left ? `Fragenpool: ${left} Kapitel fehlen noch${firstErr ? ` (Grund: ${firstErr})` : ''}.` : null; return; }
         x.status = left ? 'bereit' : 'fertig';
         if (left) x.error = `${left} Kapitel konnten nicht verarbeitet werden${firstErr ? ` (Grund: ${firstErr})` : ''} – mit „Vorbereiten“ erneut versuchen.`;
       });
