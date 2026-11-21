@@ -170,6 +170,11 @@ export function clip(text, max = 300000) {
 }
 
 // ---------- Hintergrund-Modus (Message Batches, halber Preis) ----------
+// Batch-Schnittstelle: über die eigene Vercel-Funktion (der Browser darf sie nicht direkt aufrufen)
+function batchUrl(path) {
+  const hosted = location.protocol.startsWith('http') && !/^(localhost|127\.)/.test(location.hostname) && !location.hostname.endsWith('.netlify.app');
+  return (hosted ? location.origin + '/anthropic-api/' : 'https://api.anthropic.com/v1/') + path;
+}
 const AH = key => ({ 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' });
 export function batchAvailable() {
   const c = cfg();
@@ -182,21 +187,21 @@ export async function submitBatch(reqs) {
     const sys = BASE_RULES + '\n\n' + (r.system || '') + '\n\nAntworte AUSSCHLIESSLICH mit gültigem JSON ohne erklärenden Text davor oder danach.';
     return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || c.models.smart, max_tokens: r.maxTokens || 8000, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.prompt }] } };
   });
-  const res = await fetch('https://api.anthropic.com/v1/messages/batches', { method: 'POST', headers: AH(c.key), body: JSON.stringify({ requests }) });
+  const res = await fetch(batchUrl('messages/batches'), { method: 'POST', headers: AH(c.key), body: JSON.stringify({ requests }) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
   const j = await res.json();
   return { id: j.id, model: requests[0]?.params.model };
 }
 export async function batchStatus(id) {
   const c = cfg();
-  const res = await fetch('https://api.anthropic.com/v1/messages/batches/' + encodeURIComponent(id), { headers: AH(c.key) });
+  const res = await fetch(batchUrl('messages/batches/' + encodeURIComponent(id)), { headers: AH(c.key) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
   return res.json();
 }
 // liefert [{ id, ok, text, usage }]
 export async function batchResults(id, model) {
   const c = cfg();
-  const res = await fetch('https://api.anthropic.com/v1/messages/batches/' + encodeURIComponent(id) + '/results', { headers: AH(c.key) });
+  const res = await fetch(batchUrl('messages/batches/' + encodeURIComponent(id) + '/results'), { headers: AH(c.key) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
   const lines = (await res.text()).split('\n').filter(l => l.trim());
   return lines.map(l => {
@@ -209,7 +214,7 @@ export async function batchResults(id, model) {
 }
 export async function cancelBatch(id) {
   const c = cfg();
-  const res = await fetch('https://api.anthropic.com/v1/messages/batches/' + encodeURIComponent(id) + '/cancel', { method: 'POST', headers: AH(c.key) });
+  const res = await fetch(batchUrl('messages/batches/' + encodeURIComponent(id) + '/cancel'), { method: 'POST', headers: AH(c.key) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
   return res.json();
 }

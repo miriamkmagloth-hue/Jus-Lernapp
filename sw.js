@@ -1,5 +1,5 @@
 // Service Worker: App offline startbar machen
-const VERSION = 'lernapp-v20';
+const VERSION = 'lernapp-v21';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/store.js', 'js/drive.js', 'js/ai.js', 'js/extract.js', 'js/ris.js',
@@ -20,7 +20,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
   // APIs nie cachen
-  if (/googleapis\.com|anthropic\.com|openai\.com|accounts\.google\.com|\/ris-api\/|\/ris-doc\/|\/api\/|bka\.gv\.at/.test(url.href)) return;
+  if (/googleapis\.com|anthropic\.com|openai\.com|accounts\.google\.com|\/ris-api\/|\/ris-doc\/|\/api\/|\/anthropic-api\/|bka\.gv\.at/.test(url.href)) return;
   // Bibliotheken vom CDN: einmal laden, dann aus dem Cache
   if (url.hostname === 'cdn.jsdelivr.net' || url.hostname.endsWith('fonts.googleapis.com') || url.hostname.endsWith('fonts.gstatic.com')) {
     e.respondWith(caches.open(VERSION).then(async c => {
