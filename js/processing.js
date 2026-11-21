@@ -393,7 +393,7 @@ function poolPrompt(book, ch, text) {
 export function poolEstimate(book, pages) {
   const prov = store.state.settings.provider || 'anthropic';
   const mm = store.state.settings.models?.[prov] || {};
-  const model = mm.book || mm.smart || 'sonnet';
+  const model = mm.book || mm.fast || mm.smart || 'sonnet';
   const chs = book.chapters.filter(c => isStudyChapter(c) && c.summary && !c.pool?.length);
   let usdSum = 0;
   for (const ch of chs) usdSum += estimate(model, Math.min(30000, pagesToText(pages, ch.startPage, ch.endPage).length) + digest(ch).length + 3000, 4500, { batch: batchAvailable() });
@@ -429,7 +429,7 @@ function patchPool(subId, fileId, chId, list) {
 export function estimateWork(book, chapters, pages, batch) {
   const prov = store.state.settings.provider || 'anthropic';
   const mm = store.state.settings.models?.[prov] || {};
-  const model = mm.book || mm.smart || 'sonnet';
+  const model = mm.book || mm.fast || mm.smart || 'sonnet';
   let usdSum = 0, chars = 0;
   const outPer = bookRole(book) === 'faelle' ? 9000 : 8000;
   for (const ch of chapters) {
