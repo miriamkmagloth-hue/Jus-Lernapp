@@ -232,7 +232,8 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
     const s = ch.summary;
     if (!s) {
       const job = jobs.get('book:' + book.fileId);
-      body.innerHTML = job && !job.done ? busy('Das Lehrbuch wird gerade verarbeitet …') : `<div class="card">Noch keine Zusammenfassung. <button class="btn small" data-a="sum">Jetzt erstellen</button></div>`;
+      body.innerHTML = book.batch ? `<div class="notice small">⏳ Dieses Kapitel wird gerade im Hintergrund zusammengefasst (zum halben Preis) und erscheint hier automatisch, sobald es fertig ist – meist innerhalb einer Stunde. Bis dahin kannst du im Reiter <strong>Lehrbuchtext</strong> lesen oder ein schon fertiges Kapitel lernen.</div>`
+        : job && !job.done ? busy('Das Lehrbuch wird gerade verarbeitet …') : `<div class="card">Noch keine Zusammenfassung. <button class="btn small" data-a="sum">Jetzt erstellen</button></div>`;
     } else {
       body.innerHTML = `<div class="card"><h3>Worum geht es?</h3>${md(s.kurzfassung)}</div>
       ${(s.themen || []).map(t => `<details class="card" open><summary>${esc(t.titel)} <span class="cite">${esc(t.seiten || '')}</span> ${String(t.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span>' : ''}</summary>${md(t.inhalt)}</details>`).join('')}
