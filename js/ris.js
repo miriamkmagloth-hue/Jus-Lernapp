@@ -63,7 +63,8 @@ function parseRef(ref) {
   const meta = ref?.Data?.Metadaten || ref?.Data || ref;
   const tech = meta?.Technisch || {};
   const docNr = tech.ID || findKey(meta, 'Dokumentnummer') || '';
-  const gz = asList(findKey(meta, 'Geschaeftszahl'))[0] || '';
+  const gzList = asList(findKey(meta, 'Geschaeftszahl')).join('; ').split(/\s*;\s*/).map(x => x.trim()).filter(Boolean);
+  const gz = gzList[gzList.length - 1] || '';
   const date = asList(findKey(meta, 'Entscheidungsdatum'))[0] || '';
   const normen = asList(findKey(meta, 'Normen'));
   const schlagworte = asList(findKey(meta, 'Schlagworte')).join(' ');
@@ -73,7 +74,7 @@ function parseRef(ref) {
   const textDocs = [...new Set(strs.flatMap(s => s.match(/JJT_[A-Z0-9_]+/g) || []))];
   const rsNr = asList(findKey(meta, 'Rechtssatznummern'))[0] || asList(findKey(meta, 'Rechtssatznummer'))[0] || '';
   const url = asList(findKey(meta, 'DokumentUrl'))[0] || (docNr ? `https://www.ris.bka.gv.at/Dokument.wxe?Abfrage=Justiz&Dokumentnummer=${docNr}` : '');
-  return { docNr, gz: String(gz).trim(), date: String(date).slice(0, 10), normen, schlagworte, organ: String(organ), dokTyp, textDocs, rsNr, url };
+  return { docNr, gz: String(gz).trim(), gzList, date: String(date).slice(0, 10), normen, schlagworte, organ: String(organ), dokTyp, textDocs, rsNr, url };
 }
 
 export async function searchJustiz({ norm, suchworte, gz, von, bis, seite = 1, proSeite = 'Fifty', texte = false } = {}) {
@@ -93,12 +94,46 @@ export async function searchJustiz({ norm, suchworte, gz, von, bis, seite = 1, p
   return { hits, items };
 }
 
-export async function fetchDocText(docNr) {
-  const html = await risFetch('doc', `Dokumente/Justiz/${docNr}/${docNr}.html`, true);
+// RIS-Seite in Text mit Zeilenumbrüchen umwandeln (Vorlesetext für Screenreader entfernen)
+function htmlToLines(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  doc.querySelectorAll('script,style,nav,header,footer').forEach(n => n.remove());
-  const text = (doc.body?.innerText || doc.body?.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
-  return text;
+  doc.querySelectorAll('script,style,nav,header,footer,noscript,[class*="sr-only"],[class*="SrOnly"],[class*="visually-hidden"],[aria-hidden="false"].sr').forEach(n => n.remove());
+  doc.querySelectorAll('p,div,h1,h2,h3,h4,h5,li,tr,br,dt,dd,section').forEach(n => n.appendChild(doc.createTextNode('\n')));
+  return (doc.body?.textContent || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+// Doppelt vorgelesene Absätze („§ 1298“ / „Paragraph 1298“) nur einmal behalten
+function dedupeSpoken(lines) {
+  const key = l => l.replace(/Paragraph(en)?\s*/g, '§ ').replace(/Absatz\s*/g, 'Abs ').replace(/Ziffer\s*/g, 'Z ').replace(/[^a-z0-9äöüß]/gi, '').toLowerCase();
+  const seen = new Set(), out = [];
+  for (const l of lines) { const k = key(l); if (k.length > 20 && seen.has(k)) continue; seen.add(k); out.push(l); }
+  return out;
+}
+const docPath = docNr => `Dokument.wxe?Abfrage=Justiz&Dokumentnummer=${encodeURIComponent(docNr)}`;
+
+export async function fetchDocText(docNr) {
+  const html = await risFetch('doc', docPath(docNr), true);
+  const lines = dedupeSpoken(htmlToLines(html));
+  const from = lines.findIndex(l => /^(Gericht|Kopf|Rechtssatz für)/.test(l));
+  const to = lines.findIndex((l, i) => i > from && /^Über diese Seite$/.test(l));
+  return lines.slice(Math.max(0, from), to > 0 ? to : undefined).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Rechtssatz (Kernaussage) samt Rechtssatznummer – kurz, kostenlos, direkt aus dem RIS
+const LABELS = ['Gericht', 'Dokumenttyp', 'Rechtsgebiet', 'Rechtssatznummer', 'Geschäftszahl', 'Entscheidungsdatum', 'Norm', 'Rechtssatz', 'Entscheidungstexte', 'Schlagworte', 'European Case Law Identifier (ECLI)', 'Dokumentnummer', 'Navigation im Suchergebnis', 'Über diese Seite', 'Begleitende Dokumente'];
+export async function fetchRechtssatz(docNr) {
+  const html = await risFetch('doc', docPath(docNr), true);
+  const lines = dedupeSpoken(htmlToLines(html));
+  const section = name => {
+    const i = lines.lastIndexOf(name);
+    if (i < 0) return [];
+    const out = [];
+    for (let k = i + 1; k < lines.length && !LABELS.includes(lines[k]); k++) out.push(lines[k]);
+    return out;
+  };
+  const text = section('Rechtssatz').join(' ').trim();
+  const rsNr = (section('Rechtssatznummer').join(' ').match(/RS\d{7}/) || html.match(/RS\d{7}/) || [''])[0];
+  const schlagworte = section('Schlagworte').join(' ').trim();
+  return { text, rsNr, schlagworte };
 }
 
 // "§ 1295 ABGB" -> "ABGB §1295"

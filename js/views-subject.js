@@ -4,7 +4,7 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
@@ -217,8 +217,10 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
   el.innerHTML = `<div class="small muted">${esc(sub.name)} · ${esc(book.title)} · S. ${esc(ch.startLabel || ch.startPage)}–${esc(ch.endLabel || ch.endPage)}</div>
     <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %${p.levels ? ' (' + levelText(p) + ')' : ''}` : 'noch nicht eingestuft'}</span></div>
     ${isStudyChapter(ch) ? '' : `<div class="notice warn small">Dieses Kapitel zählt nicht als Lernstoff (z. B. Verzeichnis oder Übersicht) und kommt in Plan, Einstufung und Tests nicht vor. <button class="btn ghost small" data-vis="show">Doch als Lernstoff zählen</button></div>`}
+    ${(() => { const n = sub.rulings.filter(r => ((r.chapterIds || []).includes(chId)) || (!(r.chapterIds || []).length && chaptersByNorm(sub, r).includes(chId))).length; return n ? `<div style="margin:-4px 0 8px"><a class="small" href="#/fach/${subId}/ogh" data-ogh="${chId}">⚖️ ${n} OGH-Rechtssätze zu diesem Kapitel</a></div>` : ''; })()}
     <div class="tabs">${parts.map(([k, l]) => `<a class="tab ${k === part ? 'active' : ''}" href="#/fach/${subId}/kapitel/${chId}/${k}">${l}</a>`).join('')}</div><div id="part"></div>
     ${isStudyChapter(ch) ? `<div class="row" style="margin-top:16px">${(() => { const ex = activeExams(sub)[0]; return ex && ch.summary ? `<a class="btn secondary small" href="#/fach/${subId}/einstufung/${ex.id}/${chId}">${p?.assessed ? 'Kapitel neu einstufen' : 'Dieses Kapitel einstufen'}</a>` : ''; })()}<button class="btn ghost small" data-vis="hide">Kein Lernstoff – Kapitel ausblenden</button></div>` : ''}`;
+  el.querySelectorAll('[data-ogh]').forEach(a => a.onclick = () => { oghState[subId] = { ...(oghState[subId] || { filter: 'alle', q: '' }), filter: 'alle', q: '', book: book.fileId, chapter: chId }; });
   el.querySelectorAll('[data-vis]').forEach(b => b.onclick = () => {
     store.update(s => { findChapter(s.subjects.find(x => x.id === subId), chId).chapter.hidden = b.dataset.vis === 'hide'; });
     toast(b.dataset.vis === 'hide' ? 'Ausgeblendet – zählt nicht mehr als Lernstoff' : 'Zählt wieder als Lernstoff');
@@ -420,43 +422,86 @@ export function altklausurView(el, subId, fileId) {
 }
 
 // ---------- OGH-Urteile ----------
-function tabOgh(el, sub, state = { filter: 'alle', q: '' }) {
+const oghState = {};
+function tabOgh(el, sub) {
+  const state = oghState[sub.id] ||= { filter: 'alle', q: '', book: '', chapter: '' };
+  if (sub.rulings.some(r => r.source === 'ris' && !r.kind)) store.update(s => migrateRulings(s.subjects.find(x => x.id === sub.id)), { silent: true });
+  sub = store.subject(sub.id);
   const citedAll = new Map();
   for (const b of sub.books) for (const [gz, n] of b.citations?.gz || []) citedAll.set(gz, (citedAll.get(gz) || 0) + n);
   const meta = sub.rulingMeta || {};
+  const chs = allChapters(sub);
+  const chById = new Map(chs.map(c => [c.id, c]));
+  const books = sub.books.filter(b => bookRole(b) === 'stoff' && b.chapters?.length);
+  const chaptersOf = r => { const ok = (r.chapterIds || []).filter(id => chById.has(id)); return ok.length ? ok : chaptersByNorm(sub, r); };
+  const pending = sub.rulings.filter(r => r.source === 'ris' && ((r.head == null && r.rsDocs?.length) || ((r.head || r.schlagworte) && !r.classified))).length;
+  const prepJob = () => jobs.get('oghprep:' + sub.id);
+  const startPrep = () => runJob('oghprep:' + sub.id, `OGH-Urteile für „${sub.name}“ aufbereiten`, st => prepareRulings(sub.id, st), { subId: sub.id });
+  if (pending && !prepJob() && !state.autoStarted) { state.autoStarted = true; startPrep(); }
+
+  const title = r => r.source === 'upload' ? '📄 ' + esc(r.title || r.gz)
+    : r.kind === 'rs' ? `${esc(r.rsNr || 'Rechtssatz')} <span class="tiny muted" style="font-weight:400">· ${r.gzList?.length > 1 ? `${r.gzList.length} Entscheidungen, zuletzt ${esc(r.gz)}` : 'OGH ' + esc(r.gz)}</span>`
+    : 'OGH ' + esc(r.gz);
   const draw = () => {
+    sub = store.subject(sub.id);
     let list = [...sub.rulings];
     if (state.filter === 'neu') list = list.filter(r => r.isNew);
     if (state.filter === 'eigene') list = list.filter(r => r.source === 'upload');
     if (state.filter === 'zitiert') list = list.filter(r => r.cited);
-    if (state.q) { const q = state.q.toLowerCase(); list = list.filter(r => [r.gz, r.title, r.schlagworte, (r.normen || []).join(' '), r.summary?.kernaussagen?.join(' ')].join(' ').toLowerCase().includes(q)); }
-    list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    const citedNotAdded = state.filter === 'zitiert' ? [...citedAll.entries()].filter(([gz]) => !sub.rulings.some(r => r.gz && r.gz.replace(/\s+/g, '') === gz.replace(/\s+/g, ''))).sort((a, b) => b[1] - a[1]) : [];
-    const job = jobs.get('ogh:' + sub.id);
+    if (state.book) { const ids = new Set(sub.books.find(b => b.fileId === state.book)?.chapters.map(c => c.id) || []); list = list.filter(r => chaptersOf(r).some(id => ids.has(id))); }
+    if (state.chapter) list = list.filter(r => chaptersOf(r).includes(state.chapter));
+    if (state.q) { const q = state.q.toLowerCase(); list = list.filter(r => [r.gz, r.rsNr, r.title, r.head, r.schlagworte, (r.tags || []).join(' '), (r.normen || []).join(' '), r.summary?.kernaussagen?.join(' ')].join(' ').toLowerCase().includes(q)); }
+    list.sort((a, b) => (b.gzList?.length || 1) - (a.gzList?.length || 1) || (b.date || '').localeCompare(a.date || ''));
+    const citedNotAdded = state.filter === 'zitiert' ? [...citedAll.entries()].filter(([gz]) => !sub.rulings.some(r => (r.gzList || [r.gz]).some(g => g && g.replace(/\s+/g, '') === gz.replace(/\s+/g, '')))).sort((a, b) => b[1] - a[1]) : [];
+    const job = jobs.get('ogh:' + sub.id), pj = prepJob();
+    const bookChs = state.book ? (sub.books.find(b => b.fileId === state.book)?.chapters || []).filter(isStudyChapter) : [];
+    // Anzahl je Kapitel für die Auswahlliste
+    const perCh = new Map();
+    for (const r of sub.rulings) for (const id of chaptersOf(r)) perCh.set(id, (perCh.get(id) || 0) + 1);
+    const perBook = b => sub.rulings.filter(r => chaptersOf(r).some(id => b.chapters.some(c => c.id === id))).length;
+    const item = r => {
+      const cids = chaptersOf(r);
+      const tags = (r.tags?.length ? r.tags : (r.schlagworte ? r.schlagworte.split(/[;,]\s*/).slice(0, 4) : [])).filter(Boolean);
+      const sub2 = r.head || r.summary?.kernaussagen?.[0] || (r.normen || []).slice(0, 4).join(', ');
+      return `<li><a class="item" href="#/fach/${sub.id}/urteil/${encodeURIComponent(r.id)}"><div style="flex:1;min-width:0"><div class="item-title">${title(r)} ${r.isNew ? '<span class="pill gold">neu</span>' : ''} ${r.cited ? '<span class="pill blue">im Lehrbuch</span>' : ''}</div>
+        ${tags.length ? `<div style="margin:4px 0">${tags.map(t => `<span class="pill">${esc(t)}</span>`).join(' ')}</div>` : ''}
+        <div class="small" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(String(sub2).slice(0, 400))}</div>
+        <div class="tiny muted" style="margin-top:3px">${cids.map(id => chById.get(id)).filter(Boolean).map(c => '📘 ' + esc(c.title)).join(' · ') || 'noch keinem Kapitel zugeordnet'}${(r.normen || []).length ? ' · ' + esc(r.normen.slice(0, 3).join(', ')) : ''}</div></div><span class="chev">›</span></a></li>`;
+    };
     el.innerHTML = `<div class="card"><div class="row between"><div class="small muted">${meta.lastCheck ? 'Zuletzt im RIS gesucht: ' + fmtDate(meta.lastCheck) + ` · anhand von ${meta.norms?.length || 0} Normen aus deinen Lehrbüchern` : 'Noch nicht im RIS gesucht.'}</div>
       <button class="btn small" data-a="check" ${job && !job.done ? 'disabled' : ''}>${job && !job.done ? '<span class="spinner"></span> sucht …' : 'Neue Urteile suchen'}</button></div>
-      <p class="tiny muted">Ergänzung, kein Lehrbuchstoff. Quelle: RIS (Bundeskanzleramt), CC BY 4.0.</p></div>
+      ${pj && !pj.done ? `<div class="small muted" style="margin-top:6px"><span class="spinner"></span> ${esc(pj.status || 'bereite auf …')}</div>` : ''}
+      <p class="tiny muted">Ein Eintrag = ein Rechtssatz (der Leitsatz des OGH) samt allen Entscheidungen, die ihn anwenden. Je mehr Entscheidungen, desto gefestigter die Rechtsprechung – solche stehen oben. Ergänzung, kein Lehrbuchstoff. Quelle: RIS (Bundeskanzleramt), CC BY 4.0.</p></div>
+      <div class="row" style="gap:8px;margin-bottom:8px">
+        <select id="fbook" style="flex:1;min-width:160px"><option value="">Alle Bücher</option>${books.map(b => `<option value="${b.fileId}" ${state.book === b.fileId ? 'selected' : ''}>${esc(b.title)} (${perBook(b)})</option>`).join('')}</select>
+        ${state.book ? `<select id="fch" style="flex:1;min-width:160px"><option value="">Alle Kapitel</option>${bookChs.map(c => `<option value="${c.id}" ${state.chapter === c.id ? 'selected' : ''}>${esc(c.title)} (${perCh.get(c.id) || 0})</option>`).join('')}</select>` : ''}
+      </div>
       <div class="tabs">${[['alle', 'Alle'], ['neu', 'Neu'], ['zitiert', 'Im Lehrbuch zitiert'], ['eigene', 'Eigene Uploads']].map(([k, l]) => `<button class="tab ${state.filter === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
-      <input type="text" id="q" placeholder="Suchen (GZ, Norm, Stichwort) …" value="${esc(state.q)}" style="margin-bottom:12px">
-      <div class="card"><ul class="list">${list.slice(0, 300).map(r => `<li><a class="item" href="#/fach/${sub.id}/urteil/${encodeURIComponent(r.id)}"><div style="flex:1"><div class="item-title">${r.source === 'upload' ? '📄 ' + esc(r.title || r.gz) : 'OGH ' + esc(r.gz)} ${r.isNew ? '<span class="pill gold">neu</span>' : ''} ${r.cited ? '<span class="pill blue">im Lehrbuch</span>' : ''}</div>
-        <div class="small muted">${r.date ? fmtDate(r.date) + ' · ' : ''}${esc((r.summary?.kernaussagen?.[0] || r.schlagworte || (r.normen || []).slice(0, 4).join(', ')).slice(0, 200))}</div></div><span class="chev">›</span></a></li>`).join('') || '<li class="muted small">Keine Einträge.</li>'}</ul></div>
+      <input type="text" id="q" placeholder="Suchen (Schlagwort, Norm, GZ, RS-Nummer) …" value="${esc(state.q)}" style="margin-bottom:12px">
+      <div class="tiny muted" style="margin-bottom:6px">${list.length} Einträge</div>
+      <div class="card"><ul class="list">${list.slice(0, 300).map(item).join('') || '<li class="muted small">Keine Einträge.</li>'}</ul></div>
       ${citedNotAdded.length ? `<div class="card"><h3>Im Lehrbuch zitiert, noch nicht geladen</h3><p class="tiny muted">Je öfter zitiert, desto wichtiger. Antippen zum Laden.</p><div class="row">${citedNotAdded.slice(0, 80).map(([gz, n]) => `<button class="btn secondary small" data-gz="${esc(gz)}">${esc(gz)} <span class="tiny">(${n}×)</span></button>`).join('')}</div></div>` : ''}`;
     el.querySelector('#q').oninput = e => { state.q = e.target.value; clearTimeout(el._t); el._t = setTimeout(() => { draw(); const q = el.querySelector('#q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 350); };
+    el.querySelector('#fbook').onchange = e => { state.book = e.target.value; state.chapter = ''; draw(); };
+    const fch = el.querySelector('#fch'); if (fch) fch.onchange = e => { state.chapter = e.target.value; draw(); };
   };
   el.onclick = async e => {
     const f = e.target.closest('[data-f]'); if (f) { state.filter = f.dataset.f; draw(); return; }
-    if (e.target.closest('[data-a=check]')) { runJob('ogh:' + sub.id, `Suche neue OGH-Urteile für „${sub.name}“`, st => checkNewRulings(sub.id, st).then(n => toast(n ? `${n} neue Entscheidung(en) gefunden` : 'Keine neuen Entscheidungen')), { subId: sub.id }); draw(); return; }
+    if (e.target.closest('[data-a=check]')) { runJob('ogh:' + sub.id, `Suche neue OGH-Urteile für „${sub.name}“`, st => checkNewRulings(sub.id, st).then(n => { toast(n ? `${n} neue Einträge gefunden` : 'Keine neuen Entscheidungen'); startPrep(); }), { subId: sub.id }); draw(); return; }
     const gz = e.target.closest('[data-gz]')?.dataset.gz;
     if (gz) { toast('Suche ' + gz + ' im RIS …'); try { const r = await addCitedRuling(sub.id, gz); location.hash = `#/fach/${sub.id}/urteil/${encodeURIComponent(r.id)}`; } catch (err) { toast(err.message, 6000); } }
   };
   draw();
+  // Fortschritt der Aufbereitung live anzeigen
+  clearInterval(el._poll);
+  el._poll = setInterval(() => { if (!document.body.contains(el)) return clearInterval(el._poll); const pj = prepJob(); if (pj && !pj.done) draw(); else if (el._wasRunning) { el._wasRunning = false; draw(); } if (pj && !pj.done) el._wasRunning = true; }, 4000);
 }
 
 export function rulingView(el, subId, rid, part = 'kern') {
   const sub = store.subject(subId);
   const r = sub?.rulings.find(x => x.id === rid);
   if (!r) return notFound(el);
-  setTitle(r.source === 'upload' ? (r.title || 'Urteil') : 'OGH ' + r.gz);
+  setTitle(r.source === 'upload' ? (r.title || 'Urteil') : r.kind === 'rs' && r.rsNr ? r.rsNr : 'OGH ' + r.gz);
   if (r.isNew) store.update(s => { s.subjects.find(x => x.id === subId).rulings.find(x => x.id === rid).isNew = false; }, { silent: true });
   el.innerHTML = `<div class="small muted">${r.date ? fmtDate(r.date) + ' · ' : ''}${(r.normen || []).slice(0, 6).map(n => esc(n)).join(', ')}</div>
     <div class="tabs" style="margin-top:8px">${[['kern', 'Kernaussagen'], ['zusammenfassung', 'Zusammenfassung'], ['volltext', 'Volltext'], ['chat', 'Diskutieren']].map(([k, l]) => `<a class="tab ${k === part ? 'active' : ''}" href="#/fach/${subId}/urteil/${encodeURIComponent(rid)}/${k}">${l}</a>`).join('')}</div><div id="part"></div>

@@ -5,7 +5,7 @@ import { fileToText, isSupported, pagesToText } from './extract.js';
 import { completeJson, clip, batchAvailable, submitBatch, batchStatus, batchResults, parseJson } from './ai.js';
 import { estimate } from './costs.js';
 import { tocPages, detectByHeadings, introChapter, titleOnPage, checkChapters, excerpt, relabel, pageMap } from './structure.js';
-import { searchJustiz, fetchDocText, toRisNorm, extractCitations } from './ris.js';
+import { searchJustiz, fetchDocText, fetchRechtssatz, toRisNorm, extractCitations } from './ris.js';
 
 export const CATEGORIES = {
   books: { label: 'Lehrbücher', hint: 'Die PDF-Lehrbücher dieses Fachs' },
@@ -546,10 +546,12 @@ export async function checkNewRulings(subId, onStatus = () => {}, { maxNorms = 4
       const r = await searchJustiz({ norm, von: from, proSeite: 'Fifty' });
       for (const it of r.items) {
         if (!it.gz) continue;
-        const key = it.gz.replace(/\s+/g, '');
-        const cur = found.get(key) || { gz: it.gz, date: it.date, normen: new Set(), rsDocs: new Set(), textDocs: new Set(), schlagworte: '', matched: new Set(), url: it.url };
+        // Rechtssatz (Leitsatz mit vielen Entscheidungen) = ein Eintrag; Einzelentscheidung = ein Eintrag
+        const isRs = it.docNr?.startsWith('JJR');
+        const key = isRs ? 'rs_' + (it.rsNr || it.docNr) : it.gz.replace(/\s+/g, '');
+        const cur = found.get(key) || { key, kind: isRs ? 'rs' : 'e', rsNr: it.rsNr || '', gz: it.gz, gzList: it.gzList || [it.gz], date: it.date, normen: new Set(), rsDocs: new Set(), textDocs: new Set(), schlagworte: '', matched: new Set(), url: it.url };
         it.normen.forEach(n => cur.normen.add(n));
-        if (it.docNr?.startsWith('JJR')) cur.rsDocs.add(it.docNr);
+        if (isRs) cur.rsDocs.add(it.docNr);
         if (it.docNr?.startsWith('JJT')) cur.textDocs.add(it.docNr);
         it.textDocs.forEach(d => cur.textDocs.add(d));
         if (it.date > cur.date) cur.date = it.date;
@@ -566,16 +568,18 @@ export async function checkNewRulings(subId, onStatus = () => {}, { maxNorms = 4
   let added = 0;
   store.update(s => {
     const sb = s.subjects.find(x => x.id === subId);
-    const existing = new Map(sb.rulings.filter(r => r.gz).map(r => [r.gz.replace(/\s+/g, ''), r]));
+    migrateRulings(sb);
+    const existing = new Map(sb.rulings.filter(r => r.source === 'ris').map(r => [r.id.replace(/^ris_/, ''), r]));
     for (const [key, f] of found) {
-      const ex = existing.get(key);
+      const ex = existing.get(key) || (f.kind === 'rs' ? sb.rulings.find(r => (r.rsDocs || []).some(d => f.rsDocs.has(d))) : null);
       if (ex) {
         ex.rsDocs = [...new Set([...(ex.rsDocs || []), ...f.rsDocs])];
         ex.textDocs = [...new Set([...(ex.textDocs || []), ...f.textDocs])];
         ex.matched = [...new Set([...(ex.matched || []), ...f.matched])];
+        if (f.gzList.length > (ex.gzList || []).length) { ex.gzList = f.gzList; ex.gz = f.gz; ex.date = f.date; }
         continue;
       }
-      sb.rulings.push({ id: 'ris_' + key, source: 'ris', gz: f.gz, date: f.date, normen: [...f.normen].slice(0, 12), rsDocs: [...f.rsDocs], textDocs: [...f.textDocs], matched: [...f.matched], schlagworte: f.schlagworte, url: f.url, isNew: !!last, addedAt: Date.now(), status: 'meta', chat: [] });
+      sb.rulings.push({ id: 'ris_' + key, source: 'ris', kind: f.kind, rsNr: f.rsNr, gz: f.gz, gzList: f.gzList, date: f.date, normen: [...f.normen].slice(0, 12), rsDocs: [...f.rsDocs], textDocs: [...f.textDocs], matched: [...f.matched], schlagworte: f.schlagworte, url: f.url, isNew: !!last, addedAt: Date.now(), status: 'meta', chat: [] });
       added++;
     }
     sb.rulingMeta = { lastCheck: Date.now(), norms: norms.map(n => n.norm) };
@@ -756,4 +760,98 @@ export function markDuplicates(subId) {
     const sb = s.subjects.find(x => x.id === subId);
     for (const [fid, dup] of changes) { const b = sb.books.find(x => x.fileId === fid); b.dupOf = dup; if (dup) { b.approved = false; } }
   });
+}
+
+
+// ---------- OGH: alte Einträge umstellen, Rechtssätze laden, Kapiteln zuordnen ----------
+// Früher wurde bei Rechtssätzen die ganze Liste aller Geschäftszahlen als „GZ“ gespeichert
+export function migrateRulings(sb) {
+  for (const r of sb.rulings || []) {
+    if (r.source !== 'ris' || r.kind) continue;
+    const list = String(r.gz || '').split(/\s*;\s*/).filter(Boolean);
+    r.gzList = list;
+    r.gz = list[list.length - 1] || r.gz;
+    r.kind = (r.rsDocs || []).length ? 'rs' : 'e';
+  }
+  // gleiche Rechtssätze zusammenführen
+  const byDoc = new Map();
+  sb.rulings = (sb.rulings || []).filter(r => {
+    const d = r.kind === 'rs' && r.rsDocs?.[0];
+    if (!d) return true;
+    const ex = byDoc.get(d);
+    if (!ex) { byDoc.set(d, r); return true; }
+    ex.matched = [...new Set([...(ex.matched || []), ...(r.matched || [])])];
+    ex.cited = ex.cited || r.cited;
+    return false;
+  });
+}
+
+const normNum = n => { const m = String(n).match(/§\s*(\d+)/); return m ? +m[1] : null; };
+const normLaw = n => (String(n).match(/^([A-ZÄÖÜa-zäöü-]+)\s*§/) || String(n).match(/§\s*\d+[a-z]?\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöü-]+)/) || [])[1] || '';
+
+// Kostenlose Zuordnung über die Paragraphen: Kapiteltitel („§§ 1053 ff“) und Normen aus den Zusammenfassungen
+export function chaptersByNorm(sub, r) {
+  const chs = allChapters(sub);
+  const nums = (r.normen || []).map(n => ({ law: normLaw(n), num: normNum(n) })).filter(x => x.num);
+  const score = new Map();
+  for (const c of chs) {
+    const own = (c.summary?.normen || []).map(toRisNorm).filter(Boolean).map(n => ({ law: normLaw(n), num: normNum(n) }));
+    for (const x of nums) if (own.some(o => o.num === x.num && (!o.law || !x.law || o.law === x.law))) score.set(c.id, (score.get(c.id) || 0) + 2);
+  }
+  // Kapitel mit „(§§ X ff)“ im Titel: Paragraph gehört zum Kapitel mit dem nächstkleineren Anfang im selben Buch
+  const ranged = chs.map(c => ({ c, start: (c.title.match(/\(§§?\s*(\d+)/) || [])[1] })).filter(x => x.start).map(x => ({ ...x, start: +x.start }));
+  for (const x of nums.filter(x => !x.law || x.law === 'ABGB')) {
+    const cand = ranged.filter(r2 => r2.start <= x.num).sort((a, b) => b.start - a.start)[0];
+    if (cand && x.num - cand.start < 150) score.set(cand.c.id, (score.get(cand.c.id) || 0) + 1);
+  }
+  return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([id]) => id);
+}
+
+export async function prepareRulings(subId, onStatus = () => {}) {
+  store.update(s => migrateRulings(s.subjects.find(x => x.id === subId)), { silent: true });
+  let sub = store.subject(subId);
+  const valid = new Set(allChapters(sub).map(c => c.id));
+  // 1. Rechtssätze aus dem RIS holen (kostenlos)
+  const todo = sub.rulings.filter(r => r.source === 'ris' && r.head == null && (r.rsDocs || []).length);
+  let n = 0;
+  for (const r of todo) {
+    n++;
+    onStatus(`Lade Rechtssätze aus dem RIS (${n}/${todo.length}) …`);
+    let h;
+    try { h = await fetchRechtssatz(r.rsDocs[0]); } catch (e) { console.warn(e); if (n === 1) throw e; continue; }
+    store.update(s => { const x = s.subjects.find(y => y.id === subId).rulings.find(y => y.id === r.id); if (x) { x.head = h.text || ''; x.rsNr = x.rsNr || h.rsNr; if (h.schlagworte) x.schlagworte = h.schlagworte; } }, { silent: n % 10 !== 0 });
+    await new Promise(res => setTimeout(res, 250));
+  }
+  // 2. Schlagwörter und Kapitel zuordnen (schnelles Modell, Bruchteil eines Cents pro Urteil)
+  sub = store.subject(subId);
+  const chs = allChapters(sub);
+  if (!chs.length) return;
+  const sig = chs.length + ':' + chs[0].id + ':' + chs[chs.length - 1].id;
+  const open = sub.rulings.filter(r => r.source === 'ris' && (r.head || r.schlagworte) && !(r.chapterIds || []).some(id => valid.has(id)) && r.classified !== sig);
+  const chapterList = chs.map(c => `${c.id} | ${c.bookTitle} | ${c.title}`).join('\n');
+  for (let i = 0; i < open.length; i += 40) {
+    const part = open.slice(i, i + 40);
+    onStatus(`Ordne Urteile den Kapiteln zu (${Math.min(i + 40, open.length)}/${open.length}) …`);
+    let res = {};
+    try {
+      res = await completeJson({
+        model: 'fast', maxTokens: 6000, purpose: 'OGH zuordnen',
+        system: 'Du ordnest Rechtssätze des österreichischen OGH Lehrbuchkapiteln zu. Nur zuordnen, wenn das Kapitel das Thema wirklich behandelt.',
+        messages: [{ role: 'user', content: `Gib für jeden Rechtssatz 2–4 kurze Schlagwörter (Rechtsinstitute/Probleme, wie man sie im Studium nennt) und die 1–2 passenden Kapitel-IDs aus der Liste an (leer, wenn keines passt).\nJSON: {"urteile":[{"id":"…","schlagworte":["…"],"kapitel":["…"]}]}\n\nKAPITEL (ID | Buch | Titel):\n${chapterList}\n\nRECHTSSÄTZE:\n${part.map(r => `${r.id} | Normen: ${(r.normen || []).slice(0, 5).join(', ')} | ${(r.head || r.schlagworte).slice(0, 600)}`).join('\n')}` }]
+      });
+    } catch (e) {
+      if (e.budget) { onStatus('Zuordnung per KI abgebrochen – Zuordnung nur über Paragraphen.'); break; }
+      console.warn(e); continue;
+    }
+    const map = new Map((res.urteile || []).map(u => [u.id, u]));
+    store.update(s => {
+      const sb = s.subjects.find(y => y.id === subId);
+      for (const r of part) {
+        const x = sb.rulings.find(y => y.id === r.id); if (!x) continue;
+        const u = map.get(r.id);
+        x.classified = sig;
+        if (u) { x.tags = (u.schlagworte || []).filter(Boolean).slice(0, 4); x.chapterIds = (u.kapitel || []).filter(id => valid.has(id)).slice(0, 2); }
+      }
+    });
+  }
 }
