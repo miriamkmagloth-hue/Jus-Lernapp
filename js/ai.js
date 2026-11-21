@@ -110,9 +110,15 @@ async function gemini(key, model, system, messages, maxTokens, json, signal) {
     contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
     generationConfig: { maxOutputTokens: Math.max(maxTokens, 8000), ...(json ? { responseMimeType: 'application/json' } : {}) }
   };
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
-  });
+  let res;
+  // kostenloses Kontingent: bei „zu viele Anfragen“ kurz warten und erneut versuchen
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (res.status !== 429 || attempt >= 4) break;
+    await new Promise(r => setTimeout(r, 20000 * (attempt + 1)));
+  }
   if (!res.ok) throw await httpErr(res, 'Gemini');
   const j = await res.json();
   return (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');

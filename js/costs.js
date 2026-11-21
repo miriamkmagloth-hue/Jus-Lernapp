@@ -5,12 +5,14 @@ import { store } from './store.js';
 export const PRICES = {
   sonnet: { in: 2, out: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   haiku: { in: 0.1, out: 0.5, cacheRead: 0.01, cacheWrite: 0.125, longIn: 0.5, longOut: 2.5 },
-  opus: { in: 4, out: 20, cacheRead: 0.2, cacheWrite: 5 }
+  opus: { in: 4, out: 20, cacheRead: 0.2, cacheWrite: 5 },
+  free: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } // Gemini Flash im kostenlosen Kontingent
 };
 export function priceFor(model = '') {
   const m = String(model).toLowerCase();
   if (m.includes('haiku')) return PRICES.haiku;
   if (m.includes('opus')) return PRICES.opus;
+  if (m.includes('gemini')) return PRICES.free;
   return PRICES.sonnet;
 }
 

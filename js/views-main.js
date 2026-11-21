@@ -291,10 +291,11 @@ export function settingsView(el) {
 
   <div class="card"><h3>KI</h3>
     <label class="field"><span>Anbieter</span><select id="provider">
-      <option value="anthropic" ${prov === 'anthropic' ? 'selected' : ''}>Claude (Anthropic) – empfohlen</option>
-      <option value="gemini" ${prov === 'gemini' ? 'selected' : ''}>Gemini (Google)</option>
+      <option value="anthropic" ${prov === 'anthropic' ? 'selected' : ''}>Claude (Anthropic) – beste Qualität, kostet Guthaben</option>
+      <option value="gemini" ${prov === 'gemini' ? 'selected' : ''}>Gemini (Google) – kostenloses Kontingent</option>
       <option value="openai" ${prov === 'openai' ? 'selected' : ''}>ChatGPT (OpenAI)</option></select></label>
     ${['anthropic', 'gemini', 'openai'].map(p => `<div data-prov="${p}" ${p !== prov ? 'hidden' : ''}>
+      ${p === 'gemini' ? `<p class="small">Schlüssel kostenlos unter <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> (keine Kreditkarte). Im kostenlosen Kontingent darf Google die Eingaben zur Verbesserung seiner Dienste verwenden; pro Minute sind nur wenige Anfragen möglich, Lehrbücher werden deshalb langsamer verarbeitet.</p>` : ''}
       <label class="field"><span>API-Schlüssel</span><input type="password" data-key="${p}" value="${esc(s.keys[p])}" autocomplete="off"></label>
       <div class="grid2"><label class="field"><span>Modell für Gründliches (Zusammenfassungen, Korrektur, Chat)</span><input type="text" data-model="${p}.smart" value="${esc(s.models[p].smart)}"></label>
       <label class="field"><span>Modell für Schnelles</span><input type="text" data-model="${p}.fast" value="${esc(s.models[p].fast)}"></label></div></div>`).join('')}
@@ -373,6 +374,8 @@ export function setupView(el) {
   </ol>
   <p class="small muted">Beim ersten Verbinden zeigt Google eventuell „Google hat diese App nicht überprüft“ – das ist normal bei eigenen Apps. Auf „Weiter“ tippen.</p>
   <h3>2. KI-Schlüssel</h3>
+  <p class="small"><strong>Kostenlos:</strong> Gemini (Google). Öffne <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, melde dich mit deinem Google-Konto an, „API-Schlüssel erstellen“, kopieren und unten eintragen. Keine Kreditkarte nötig. Hinweis: Im kostenlosen Kontingent darf Google die Eingaben zur Verbesserung seiner Dienste verwenden.</p>
+  <p class="small"><strong>Kostenpflichtig, beste Qualität:</strong> Claude (Anthropic):</p>
   <ol>
     <li>Öffne <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a>, registriere dich und lade unter „Billing“ ein kleines Guthaben auf (z. B. 10 €).</li>
     <li>Unter „API Keys“ einen Schlüssel erstellen und kopieren.</li>
@@ -382,12 +385,14 @@ export function setupView(el) {
   <p>Diese Seite in Chrome am Handy öffnen → Menü (⋮) → <strong>„Zum Startbildschirm hinzufügen“</strong> bzw. „App installieren“. Dann hast du das Icon wie bei einer normalen App.</p>
   </div>
   <div class="card"><label class="field"><span>Google-Client-ID</span><input type="text" id="cid" value="${esc(local.googleClientId)}"></label>
-  <label class="field"><span>Claude-API-Schlüssel</span><input type="password" id="akey" value="${esc(store.state.settings.keys.anthropic)}"></label>
+  <label class="field"><span>Gemini-API-Schlüssel (kostenlos)</span><input type="password" id="gkey" value="${esc(store.state.settings.keys.gemini)}"></label>
+  <label class="field"><span>oder Claude-API-Schlüssel</span><input type="password" id="akey" value="${esc(store.state.settings.keys.anthropic)}"></label>
   <button class="btn" data-a="save">Speichern und mit Google verbinden</button></div>`;
   el.querySelector('[data-a=save]').onclick = async () => {
     local.googleClientId = el.querySelector('#cid').value.trim();
     const k = el.querySelector('#akey').value.trim();
-    store.update(s => { if (k) { s.settings.keys.anthropic = k; s.settings.provider = 'anthropic'; } });
+    const g = el.querySelector('#gkey').value.trim();
+    store.update(s => { if (k) { s.settings.keys.anthropic = k; s.settings.provider = 'anthropic'; } if (g) { s.settings.keys.gemini = g; if (!k) s.settings.provider = 'gemini'; } });
     try { await signIn(); await syncOnStart(); toast('Eingerichtet!'); location.hash = '#/'; autoUpdate(); }
     catch (e) { toast(e.message, 6000); }
   };

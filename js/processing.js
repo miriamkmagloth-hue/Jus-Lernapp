@@ -338,7 +338,8 @@ export async function summarizeChapter(subId, fileId, chId, pagesOpt, { budgetEx
 
 // Kostenvoranschlag für die noch offenen Kapitel eines Buchs
 export function estimateWork(book, chapters, pages, batch) {
-  const model = store.state.settings.models?.anthropic?.smart || 'sonnet';
+  const prov = store.state.settings.provider || 'anthropic';
+  const model = store.state.settings.models?.[prov]?.smart || 'sonnet';
   let usdSum = 0, chars = 0;
   const outPer = bookRole(book) === 'faelle' ? 6000 : 3500;
   for (const ch of chapters) {
