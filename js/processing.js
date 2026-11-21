@@ -202,7 +202,8 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
     // Kostenvoranschlag – ohne Freigabe wird nichts an die KI geschickt
     const useBatch = batchAvailable();
     const est = estimateWork(book, work, t.pages, useBatch);
-    if (!book.approved) {
+    // Kostenloser Anbieter (Gemini): keine Freigabe nötig
+    if (!book.approved && !(est.usd === 0 && !useBatch)) {
       patchBook(subId, fileId, b => { b.status = 'bereit'; b.estimate = est; });
       onStatus(`Bereit – Zusammenfassen kostet ca. ${est.usd.toFixed(2)} $. Bitte im Reiter „Lehrbuch“ freigeben.`);
       return;
@@ -220,14 +221,25 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
       return;
     }
     // ohne Hintergrund-Modus: Kapitel für Kapitel (freigegeben, daher ohne Limit-Rückfrage)
-    let i = 0;
+    let i = 0, failed = 0, lastErr = '';
     for (const ch of work) {
       i++;
       const cur = store.subject(subId).books.find(b => b.fileId === fileId);
       if (!cur || bookRole(cur) !== role) { patchBook(subId, fileId, b => { b.status = 'pausiert'; }); onStatus('angehalten'); return; }
       onStatus(`${role === 'faelle' ? 'Löse Fälle heraus' : 'Fasse zusammen'} (${i} von ${work.length}): ${ch.title}`);
-      if (role === 'faelle') await extractCases(subId, fileId, ch.id, t.pages, { budgetExempt: true });
-      else await summarizeChapter(subId, fileId, ch.id, t.pages, { budgetExempt: true });
+      try {
+        if (role === 'faelle') await extractCases(subId, fileId, ch.id, t.pages, { budgetExempt: true });
+        else await summarizeChapter(subId, fileId, ch.id, t.pages, { budgetExempt: true });
+      } catch (e) {
+        // ein Kapitel schlägt fehl → die anderen trotzdem verarbeiten; bei Schlüssel-/Guthabenproblemen sofort aufhören
+        failed++; lastErr = e.message; console.warn(ch.title, e);
+        if (/401|403|credit|guthaben|api key|schlüssel|billing/i.test(e.message)) throw e;
+      }
+    }
+    if (failed) {
+      patchBook(subId, fileId, b => { b.status = 'fehler'; b.estimate = null; b.approved = false; b.error = `${failed} Kapitel konnten nicht verarbeitet werden (${lastErr}). Mit „Erneut vorbereiten“ noch einmal versuchen.`; });
+      onStatus(`${failed} Kapitel fehlgeschlagen`);
+      return;
     }
     patchBook(subId, fileId, b => { b.status = 'fertig'; b.estimate = null; b.approved = false; });
     store.update(s => { const f = s.subjects.find(x => x.id === subId).files[fileId]; if (f) { f.isNew = false; f.changed = false; } });
@@ -363,8 +375,9 @@ export async function pollBatches(onDone = () => {}) {
       let results;
       try { results = await batchResults(b.batch.id, b.batch.model); } catch (e) { console.warn(e); continue; }
       let ok = 0, failed = 0;
+      let firstErr = '';
       for (const r of results) {
-        if (!r.ok) { failed++; continue; }
+        if (!r.ok) { failed++; firstErr = firstErr || r.error || ''; continue; }
         let j; try { j = parseJson(r.text); } catch { failed++; continue; }
         if (b.batch.kind === 'faelle') patchCases(sub.id, b.fileId, r.id, (j.faelle || []).filter(f => f && (f.sachverhalt || f.loesung)));
         else patchSummary(sub.id, b.fileId, r.id, j);
@@ -375,7 +388,7 @@ export async function pollBatches(onDone = () => {}) {
         const left = x.chapters.filter(c => isStudyChapter(c) && (b.batch.kind === 'faelle' ? !c.cases : !c.summary)).length;
         x.batch = null; x.estimate = null;
         x.status = left ? 'bereit' : 'fertig';
-        if (left) x.error = `${left} Kapitel konnten nicht verarbeitet werden – du kannst sie erneut freigeben.`;
+        if (left) x.error = `${left} Kapitel konnten nicht verarbeitet werden${firstErr ? ` (Grund: ${firstErr})` : ''} – mit „Vorbereiten“ erneut versuchen.`;
       });
       onDone(b, ok, failed);
     }

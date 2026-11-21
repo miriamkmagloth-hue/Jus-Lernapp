@@ -1,6 +1,6 @@
 // Einstieg: Start, Navigation, automatische Synchronisierung
 import { STRUCT_VER, markDuplicates } from './processing.js';
-import { store, local, bookRole, bookInExam } from './store.js';
+import { store, local, bookRole, bookInExam, isStudyChapter } from './store.js';
 import { openLaw } from './law.js';
 import { signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, canStaySignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
@@ -163,6 +163,8 @@ export function queueProcessing(id) {
     if (b.approved) return true;
     if (b.chapters?.length && b.structVer !== STRUCT_VER) return true; // Kapitel mit verbesserter Erkennung neu bestimmen (kostenlos)
     if (!b.chapters?.length) return true;
+    const freeAI = store.state.settings.provider === 'gemini';
+    if (freeAI && b.chapters.some(c => isStudyChapter(c) && (r === 'faelle' ? !c.cases : !c.summary))) return true; // kostenlos: einfach weitermachen
     if (b.status === 'bereit' && b.estimate) return false;
     const open = b.chapters.some(c => r === 'faelle' ? !c.cases : !c.summary);
     return open && !b.estimate;
