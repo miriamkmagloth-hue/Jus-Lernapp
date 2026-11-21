@@ -64,6 +64,7 @@ export const usd = x => (x < 0.01 && x > 0 ? '< 0,01' : x.toLocaleString('de-AT'
 // Vor einer Anfrage prüfen: Ist das Limit erreicht, wird gefragt
 let extraToday = { day: '', usd: 0 };
 export async function checkBudget(estUsd, purpose) {
+  if (!(estUsd > 0)) return; // kostenlose Anfragen (Gemini) nie blockieren
   const l = limits();
   if (extraToday.day !== day()) extraToday = { day: day(), usd: 0 };
   const today = spentToday(), month = spentMonth();
