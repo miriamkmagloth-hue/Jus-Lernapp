@@ -114,8 +114,8 @@ async function gemini(key, model, system, messages, maxTokens, json, signal) {
   // kostenloses Kontingent: bei „zu viele Anfragen“ kurz warten und erneut versuchen
   for (let attempt = 0; ; attempt++) {
     res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
-      method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
-    });
+      method: 'POST', signal: signal || AbortSignal.timeout(180000), headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+    }).catch(e => { if (e.name === 'TimeoutError') throw new Error('Gemini antwortet nicht (Zeitüberschreitung). Bitte später nochmal versuchen.'); throw e; });
     if (res.status !== 429 || attempt >= 4) break;
     const wait = 20 * (attempt + 1);
     try { window.dispatchEvent(new CustomEvent('ai-status', { detail: `Gemini: kostenloses Kontingent gerade ausgeschöpft – warte ${wait} Sekunden und versuche es erneut …` })); } catch {}
