@@ -126,8 +126,10 @@ export async function fileToText(file, data, onProgress) {
   throw new Error('Dateityp wird nicht unterstützt: ' + file.name + ' (möglich: PDF, Word .docx, Text, Google Docs)');
 }
 
+// Verzeichniszeilen („Kauf ........ 2/12“) werden weggelassen – sie sind kein Lernstoff
+const DOT_LINE = /(?:[.…]\s?){4,}\s*[\dIVXLC]+(?:\/\d+)?\s*$/;
 export function pagesToText(pages, from = 1, to = Infinity) {
-  return pages.filter(p => p.n >= from && p.n <= to).map(p => `[S. ${p.label}]\n${p.text}`).join('\n\n');
+  return pages.filter(p => p.n >= from && p.n <= to).map(p => `[S. ${p.label}]\n${p.text.split('\n').filter(l => !DOT_LINE.test(l)).join('\n')}`).join('\n\n');
 }
 
 export const SUPPORTED = /\.(pdf|docx|txt|md|srt|vtt|rtf)$/i;

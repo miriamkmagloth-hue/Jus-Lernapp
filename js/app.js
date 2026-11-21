@@ -1,4 +1,5 @@
 // Einstieg: Start, Navigation, automatische Synchronisierung
+import { STRUCT_VER, markDuplicates } from './processing.js';
 import { store, local, bookRole, bookInExam } from './store.js';
 import { openLaw } from './law.js';
 import { signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, canStaySignedIn } from './drive.js';
@@ -160,11 +161,13 @@ export function queueProcessing(id) {
     if (r === 'aus' || ['fehler', 'pausiert', 'hintergrund'].includes(b.status) || b.batch) return false;
     if (r === 'nachschlag') return b.status !== 'nachschlagbar';
     if (b.approved) return true;
+    if (b.chapters?.length && b.structVer !== STRUCT_VER) return true; // Kapitel mit verbesserter Erkennung neu bestimmen (kostenlos)
     if (!b.chapters?.length) return true;
     if (b.status === 'bereit' && b.estimate) return false;
     const open = b.chapters.some(c => r === 'faelle' ? !c.cases : !c.summary);
     return open && !b.estimate;
   };
+  markDuplicates(id);
   const books = sub.books.filter(needsWork).sort((a, b) => rank(a) - rank(b));
   // Bücher, die schon verarbeitet sind: echten Titel nachträglich erkennen
   for (const b of sub.books) if (!b.titleDetected && !b.titleManual && bookRole(b) !== 'aus' && !books.includes(b)) runJob('title:' + b.fileId, `Buchtitel von „${b.title}“ erkennen`, () => detectBookTitle(id, b.fileId), { subId: id });

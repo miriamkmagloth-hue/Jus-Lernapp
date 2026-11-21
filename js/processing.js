@@ -4,6 +4,7 @@ import { listRecursive, downloadFile, getFileMeta, readAppFile, writeAppFile, is
 import { fileToText, isSupported, pagesToText } from './extract.js';
 import { completeJson, clip, batchAvailable, submitBatch, batchStatus, batchResults, parseJson } from './ai.js';
 import { estimate } from './costs.js';
+import { tocPages, detectByHeadings, introChapter, titleOnPage, checkChapters, excerpt, relabel, pageMap } from './structure.js';
 import { searchJustiz, fetchDocText, toRisNorm, extractCitations } from './ris.js';
 
 export const CATEGORIES = {
@@ -68,6 +69,12 @@ function registerItem(sb, f) {
 const textName = fileId => `text-${fileId}.json`;
 
 export async function getFileText(sub, fileId, onProgress) {
+  const v = await getFileTextRaw(sub, fileId, onProgress);
+  if (v?.pages && !v.relabeled) { v.pages = relabel(v.pages); v.relabeled = true; }
+  return v;
+}
+
+async function getFileTextRaw(sub, fileId, onProgress) {
   const cached = await textGet('file:' + fileId);
   const meta = sub.files[fileId];
   const fresh = v => v && (!meta || v.modifiedTime === meta.modifiedTime);
@@ -157,15 +164,27 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
 
     try { await detectBookTitle(subId, fileId); } catch (e) { console.warn('Titel nicht erkannt', e); }
     let book = store.subject(subId).books.find(b => b.fileId === fileId);
-    if (!book.chapters?.length) {
+    if (!book.chapters?.length || book.structVer !== STRUCT_VER) {
       onStatus('Erkenne Kapitel …');
       const chapters = await detectChapters(t.pages, t.outline);
       const cits = extractCitations(t.pages.map(p => p.text).join('\n'));
+      const old = book.chapters || [];
+      let kept = 0, dropped = 0;
       patchBook(subId, fileId, b => {
         b.numPages = t.pages.length;
-        b.chapters = chapters.map(c => ({ id: uid('k_'), title: c.title, startPage: c.start, endPage: c.end, startLabel: t.pages[c.start - 1]?.label, endLabel: t.pages[c.end - 1]?.label, pages: c.end - c.start + 1, summary: null, status: 'neu' }));
+        b.chapters = chapters.map(c => {
+          // Ergebnisse nur übernehmen, wenn das Kapitel exakt dieselben Seiten hatte (sonst stammen sie aus falschem Text)
+          const o = old.find(x => x.startPage === c.start && x.endPage === c.end);
+          const base = { title: c.title, startPage: c.start, endPage: c.end, startLabel: t.pages[c.start - 1]?.label, endLabel: t.pages[c.end - 1]?.label, pages: c.end - c.start + 1, intro: !!c.intro, preview: excerpt(t.pages, c.start, 200) };
+          if (o) { kept++; return { ...o, ...base, id: o.id }; }
+          return { id: uid('k_'), ...base, summary: null, status: 'neu' };
+        });
+        dropped = old.filter(o => !b.chapters.some(c => c.id === o.id) && (o.summary?.kurzfassung || o.cases?.length)).length;
+        b.structWarn = checkChapters(b.chapters.map(c => ({ id: c.id, title: c.title, start: c.startPage, end: c.endPage })), t.pages).map(w => w.msg);
+        b.structVer = STRUCT_VER;
         b.citations = { gz: cits.gz.slice(0, 150), rs: cits.rs.slice(0, 150) };
-        b.status = 'gegliedert';
+        b.status = 'gegliedert'; b.estimate = null; b.approved = false;
+        if (old.length && dropped) b.notice = `Kapitel neu erkannt. ${dropped} alte Zusammenfassung(en) stammten aus falschen Seiten und wurden entfernt.`;
       });
     }
     book = store.subject(subId).books.find(b => b.fileId === fileId);
@@ -219,67 +238,75 @@ export async function processBook(subId, fileId, onStatus = () => {}) {
   }
 }
 
+export const STRUCT_VER = 2;
+
+// Kapitel erkennen – zuerst kostenlos aus Überschriften im Text, dann aus Lesezeichen (geprüft), zuletzt per KI (geprüft)
 export async function detectChapters(pages, outline) {
   const n = pages.length;
-  const skipPages = (outline || []).filter(o => o.page && o.level <= 1 && SKIP_TITLES.test(o.title || '')).map(o => o.page);
-  let entries = (outline || []).filter(o => o.page && o.title && !SKIP_TITLES.test(o.title));
-  let chosen = [];
-  if (entries.length) {
+  const toc = tocPages(pages);
+  const finish = list => {
+    list = list.filter(c => c.page >= 1 && c.page <= n && !toc.has(c.page)).sort((a, b) => a.page - b.page);
+    const dedup = [];
+    for (const c of list) { const last = dedup[dedup.length - 1]; if (last && last.page === c.page) continue; dedup.push({ ...c }); }
+    return dedup.map((c, i) => ({ title: c.title, start: c.page, end: Math.max(c.page, (dedup[i + 1]?.page || c.endHint || n + 1) - 1), intro: c.intro }));
+  };
+  // 1. Überschriften wie „5. Kapitel“, „Fall 3“, „§ 4“ im Fließtext
+  const heads = detectByHeadings(pages, toc);
+  if (heads) {
+    const intro = introChapter(pages, toc, heads[0].start);
+    const out = heads.map(h => ({ title: h.title, start: h.start, end: h.end }));
+    return intro ? [{ title: intro.title, start: intro.start, end: intro.end, intro: true }, ...out] : out;
+  }
+  // 2. Lesezeichen des PDFs – nur wenn die Überschriften wirklich auf den Zielseiten stehen
+  const entries = (outline || []).filter(o => o.page && o.title && !SKIP_TITLES.test(o.title));
+  if (entries.length >= 3) {
     const lvl0 = entries.filter(e => e.level === 0);
     const base = lvl0.length >= 3 ? lvl0 : entries.filter(e => e.level === 1).length >= 3 ? entries.filter(e => e.level === 1) : entries;
-    // zu große Kapitel in Unterkapitel aufteilen
-    for (let i = 0; i < base.length; i++) {
-      const e = base[i];
-      const next = base[i + 1]?.page || n + 1;
-      const size = next - e.page;
-      const kids = entries.filter(k => k.level === e.level + 1 && k.page >= e.page && k.page < next);
-      if (size > 70 && kids.length >= 2) {
-        if (kids[0].page > e.page) chosen.push({ title: e.title, page: e.page });
-        kids.forEach(k => chosen.push({ title: `${e.title} – ${k.title}`, page: k.page }));
-      } else chosen.push({ title: e.title, page: e.page });
+    const ok = base.filter(e => !toc.has(e.page) && titleOnPage(e.title, pages[e.page - 1]));
+    if (ok.length >= 3 && ok.length >= base.length * 0.7) {
+      const chosen = [];
+      for (let i = 0; i < ok.length; i++) {
+        const e = ok[i], next = ok[i + 1]?.page || n + 1;
+        const kids = entries.filter(k => k.level === e.level + 1 && k.page >= e.page && k.page < next && titleOnPage(k.title, pages[k.page - 1]));
+        if (next - e.page > 70 && kids.length >= 2) {
+          if (kids[0].page > e.page) chosen.push({ title: e.title, page: e.page });
+          kids.forEach(k => chosen.push({ title: `${e.title} – ${k.title}`, page: k.page }));
+        } else chosen.push({ title: e.title, page: e.page });
+      }
+      return finish(chosen);
     }
   }
-  if (chosen.length < 3) chosen = await detectChaptersAI(pages);
-  chosen = chosen.filter(c => c.page >= 1 && c.page <= n).sort((a, b) => a.page - b.page);
-  // doppelte Startseiten zusammenfassen
-  const dedup = [];
-  for (const c of chosen) {
-    const last = dedup[dedup.length - 1];
-    if (last && last.page === c.page) last.title += ' / ' + c.title; else dedup.push({ ...c });
-  }
-  if (!dedup.length) dedup.push({ title: 'Gesamtes Buch', page: 1 });
-  const bounds = [...dedup.map(c => c.page), ...skipPages, n + 1].sort((a, b) => a - b);
-  return dedup.map(c => ({ title: c.title, start: c.page, end: Math.max(c.page, bounds.find(p => p > c.page) - 1) }));
+  // 3. KI liest das Inhaltsverzeichnis – jede Startseite wird im Text überprüft
+  let ai = [];
+  try { ai = await detectChaptersAI(pages, toc); } catch (e) { console.warn(e); }
+  if (ai.length >= 3) return finish(ai);
+  // 4. Notlösung: in Abschnitte zu ca. 25 Seiten teilen (ehrlich benannt)
+  const first = Math.max(0, ...toc) + 1, out = [];
+  for (let p = first; p <= n; p += 25) out.push({ title: `Seiten ${pages[p - 1].label}–${pages[Math.min(n, p + 24) - 1].label}`, page: p });
+  return finish(out);
 }
 
-async function detectChaptersAI(pages) {
-  const head = pages.slice(0, 35).map(p => `[PDF-Seite ${p.n} | Seitenzahl ${p.label}]\n${p.text}`).join('\n\n');
+async function detectChaptersAI(pages, toc) {
+  const head = pages.slice(0, 40).map(p => `[PDF-Seite ${p.n} | Seitenzahl ${p.label}]\n${p.text}`).join('\n\n');
   const r = await completeJson({
     model: 'fast', maxTokens: 6000, purpose: 'Kapitel erkennen',
     system: 'Du analysierst das Inhaltsverzeichnis eines juristischen Lehrbuchs.',
-    messages: [{ role: 'user', content: `Hier sind die ersten Seiten eines Lehrbuchs. Finde das Inhaltsverzeichnis und gib die Hauptkapitel (sinnvolle Lerneinheiten, typischerweise 8–40 Stück; zu große Teile in ihre Abschnitte zerlegen) zurück.\nFormat: {"kapitel":[{"titel":"…","seite":"gedruckte Seitenzahl laut Inhaltsverzeichnis"}]}\nLass Vorwort, Verzeichnisse und Register weg.\n\n${clip(head, 90000)}` }]
+    messages: [{ role: 'user', content: `Hier sind die ersten Seiten eines Lehrbuchs. Finde das Inhaltsverzeichnis und gib die Hauptkapitel (sinnvolle Lerneinheiten, typischerweise 8–40 Stück) mit ihrer Überschrift genau wie im Buch zurück.\nFormat: {"kapitel":[{"titel":"…","seite":"gedruckte Seitenzahl laut Inhaltsverzeichnis oder leer, wenn dort nur Randzahlen stehen"}]}\nLass Vorwort, Verzeichnisse und Register weg.\n\n${clip(head, 90000)}` }]
   });
-  const list = r.kapitel || [];
-  // gedruckte Seitenzahl -> PDF-Seite
+  const list = (r.kapitel || []).filter(k => k && k.titel);
   const byLabel = new Map(pages.map(p => [String(p.label).trim(), p.n]));
-  const tocEnd = 20;
-  const offsets = [];
-  const norm = s => s.toLowerCase().replace(/[^a-zäöüß0-9]+/g, ' ').trim();
+  const after = Math.max(0, ...toc);
+  const out = [];
+  let last = after;
   for (const k of list) {
-    const key = norm(k.titel).slice(0, 28);
-    if (key.length < 6) continue;
-    const hit = pages.find(p => p.n > tocEnd && norm(p.text.slice(0, 600)).includes(key));
-    const printed = parseInt(k.seite, 10);
-    if (hit && !isNaN(printed)) offsets.push(hit.n - printed);
+    // Kandidat aus der Seitenzahl, danach Umgebung und notfalls das ganze Buch nach der Überschrift absuchen
+    const guess = byLabel.get(String(k.seite || '').trim());
+    const near = guess ? [guess, guess + 1, guess - 1, guess + 2, guess + 3] : [];
+    let hit = near.find(p => p > after && pages[p - 1] && titleOnPage(k.titel, pages[p - 1]));
+    if (!hit) hit = pages.find(p => p.n > last && titleOnPage(k.titel, p))?.n;
+    if (hit && hit > last) { out.push({ title: k.titel, page: hit }); last = hit; }
   }
-  offsets.sort((a, b) => a - b);
-  const offset = offsets.length ? offsets[Math.floor(offsets.length / 2)] : 0;
-  return list.map(k => {
-    const lab = String(k.seite).trim();
-    let page = byLabel.get(lab);
-    if (!page) { const p = parseInt(lab, 10); if (!isNaN(p)) page = p + offset; }
-    return { title: k.titel, page };
-  }).filter(c => c.page);
+  return out;
 }
 
 function summaryPrompt(book, ch, text) {
@@ -696,4 +723,37 @@ export function addMistake(m) {
     s.progress.mistakes.unshift({ id: uid('m_'), at: Date.now(), ...m });
     if (s.progress.mistakes.length > 500) s.progress.mistakes.length = 500;
   }, { silent: true });
+}
+
+// ---------- Doppelte Bücher (alte und neue Auflage) ----------
+const editionNo = b => {
+  const src = `${b.edition || ''} ${b.fileTitle || ''} ${b.title || ''}`;
+  const m = src.match(/(\d{1,2})\s*\.?\s*(?:auflage|aufl\b|a\b|ed\b|edition)/i) || src.match(/(?:auflage|aufl\.?)\s*(\d{1,2})/i);
+  return m ? +m[1] : 0;
+};
+const bookKey = b => String(b.title || '').toLowerCase().replace(/\(?\d{1,2}\.?\s*(auflage|aufl\.?)\)?/g, '').replace(/[^a-zäöüß0-9]+/g, ' ').trim();
+
+// Gleiches Buch mehrfach vorhanden? Dann nur die neueste Auflage verwenden, die anderen auf „nicht verwenden“
+export function markDuplicates(subId) {
+  const sub = store.subject(subId);
+  if (!sub) return;
+  const groups = new Map();
+  for (const b of sub.books) {
+    if (!b.titleDetected || b.roleManual) continue;
+    const k = bookKey(b);
+    if (k.length < 4) continue;
+    (groups.get(k) || groups.set(k, []).get(k)).push(b);
+  }
+  const changes = [];
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const mt = b => Date.parse(sub.files[b.fileId]?.modifiedTime || 0) || 0;
+    const keep = [...list].sort((a, b) => editionNo(b) - editionNo(a) || mt(b) - mt(a))[0];
+    for (const b of list) changes.push([b.fileId, b === keep ? null : keep.fileId]);
+  }
+  if (!changes.some(([fid, dup]) => (sub.books.find(b => b.fileId === fid).dupOf || null) !== dup)) return;
+  store.update(s => {
+    const sb = s.subjects.find(x => x.id === subId);
+    for (const [fid, dup] of changes) { const b = sb.books.find(x => x.fileId === fid); b.dupOf = dup; if (dup) { b.approved = false; } }
+  });
 }

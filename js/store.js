@@ -191,11 +191,13 @@ export function isStudyChapter(c) {
 }
 
 // Rolle eines Buchs: 'stoff' (Lernstoff), 'nachschlag' (nur nachschlagen, z. B. Gesetzestext), 'aus' (nicht verwenden)
-const LOOKUP_TITLE = /gesetz(es)?text|kodex|textausgabe|gesetzessammlung/i;
+const LOOKUP_TITLE = /gesetz(es)?text|kodex|textausgabe|gesetzessammlung|^[a-zäöüß-]*(gesetz|gesetzbuch|ordnung)(\s+\d{4})?$|^(abgb|kschg|mrg|ugb|ehg|eheg|weg|vgg|ecg|fagg|iprg|ausserstrg|zpo|eo|io|stgb|stpo|b-vg|avg)(\s+\d{4})?$/i;
 const CASES_TITLE = /fall+(ö|oe)sung|fallsammlung|fallbuch|fälle|faelle|casebook|übungsbuch|uebungsbuch|klausurenkurs/i;
 export function bookRole(b) {
+  if (b.roleManual && b.role) return b.role;
+  if (b.dupOf) return 'aus'; // ältere Auflage eines anderen Buchs
+  if (LOOKUP_TITLE.test((b.title || '').trim()) || LOOKUP_TITLE.test((b.fileTitle || '').trim())) return 'nachschlag';
   if (b.role) return b.role;
-  if (LOOKUP_TITLE.test(b.title || '')) return 'nachschlag';
   if (CASES_TITLE.test(b.title || '')) return 'faelle';
   return 'stoff';
 }

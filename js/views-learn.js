@@ -580,11 +580,11 @@ export function assessmentView(el, subId, examId, onlyChapter) {
   el.innerHTML = `<div class="card"><h3>Einstufungstest: ${esc(exam.name)}</h3>
     <p class="small">Aufgeteilt nach Lehrbüchern in überschaubare Teile. Mach einen Teil, wann es dir passt – der Lernplan rechnet sofort mit jedem fertigen Teil.</p>
     <div class="progress green" style="margin:8px 0 4px"><div style="width:${Math.round(100 * totalDone / chs.length)}%"></div></div>
-    <div class="tiny muted">${totalDone} von ${chs.length} Kapiteln eingestuft${waiting.length ? ` · ${waiting.length} weitere Kapitel werden noch verarbeitet` : ''}</div>
+    <div class="tiny muted">${totalDone} von ${chs.length} Kapiteln eingestuft${waiting.length ? ` · ${waiting.length} weitere Kapitel noch nicht zusammengefasst` : ''}</div>
     <label class="field" style="margin-top:12px"><span>Genauigkeit</span><select id="depth">${Object.entries(DEPTH).map(([k, d]) => `<option value="${k}" ${DEPTH[k] === per ? 'selected' : ''}>${esc(d.label)}</option>`).join('')}</select></label>
     ${nextPart ? `<button class="btn block" data-part="${nextPart.key}">▶ Als Nächstes: ${esc(nextPart.book)} – ${esc(nextPart.label)} <span class="tiny" style="opacity:.8">(ca. ${minutes(nextPart)} Min)</span></button>` : '<div class="notice ok small">Alles eingestuft. Du kannst einzelne Teile jederzeit wiederholen.</div>'}
     <p class="small muted" style="margin-top:10px">Wenn du etwas nicht weißt, wähle „Weiß ich nicht“. Hast du nur geraten, tippe vorher auf „🎲 Ich rate“ – geratene Treffer zählen nur halb.</p></div>
-    ${[...byBook.values()].map((b, bi) => `<div class="card"><h3>${bi + 1}. 📘 ${esc(b.title)}</h3>${b.waiting.length ? `<p class="tiny muted">${b.waiting.length} Kapitel ${b.chapters.length ? 'werden' : 'werden noch'} gerade verarbeitet und erscheinen hier, sobald ihre Zusammenfassung fertig ist.</p>` : ''}<ul class="list">${parts.filter(p => p.book === b.title).map(p => {
+    ${[...byBook.values()].map((b, bi) => `<div class="card"><h3>${bi + 1}. 📘 ${esc(b.title)}</h3>${b.waiting.length ? `<p class="tiny muted">${b.waiting.length} Kapitel sind noch nicht zusammengefasst und erscheinen hier, sobald du das Buch im Reiter „Lehrbuch“ freigegeben hast und die Zusammenfassung fertig ist.</p>` : ''}<ul class="list">${parts.filter(p => p.book === b.title).map(p => {
       const d = doneCount(p);
       const avg = d ? p.list.filter(c => prog[c.id]?.assessed).reduce((a, c) => a + prog[c.id].mastery, 0) / d : 0;
       return `<li><div class="row between"><div style="flex:1;min-width:0"><div class="item-title">${esc(p.label)} ${d === p.list.length ? `<span class="dot ${ampel(avg, true)}"></span>` : ''}</div>

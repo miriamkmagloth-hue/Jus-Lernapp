@@ -41,10 +41,21 @@ function bookAction(b, job) {
   if (job && !job.done) return `<div class="small muted" style="margin-top:8px"><span class="spinner"></span> ${esc(job.status)}</div>`;
   if (b.status === 'bereit' && b.estimate) {
     return `<div class="notice gold small" style="margin-top:8px"><strong>Bereit.</strong> ${verb}: ${b.estimate.chapters} Kapitel, kostet ca. <strong>${b.estimate.usd.toLocaleString('de-AT', { minimumFractionDigits: 2 })} $</strong>${b.estimate.batch ? ' (Hintergrund-Modus, halber Preis)' : ''}. Einmalig – danach kostet das Lesen der Zusammenfassungen nichts mehr.
+      <div class="tiny" style="margin-top:4px">Bitte vorher kurz die Kapitelliste prüfen: Passen Titel, Seiten und Leseprobe? Wenn etwas nicht stimmt, bitte nicht freigeben.</div>
       <div style="margin-top:6px"><button class="btn small" data-approve="${b.fileId}">${verb} freigeben</button></div></div>`;
   }
   if (b.status === 'fertig') return '';
   return `<div style="margin-top:8px"><button class="btn secondary small" data-proc="${b.fileId}">${b.status === 'fehler' ? 'Erneut vorbereiten' : 'Vorbereiten (kostenlos)'}</button></div>`;
+}
+
+function bookNotes(b, sub) {
+  let h = '';
+  if (b.notice) h += `<div class="notice small" style="margin-top:8px">${esc(b.notice)}</div>`;
+  if (b.structWarn?.length) h += `<div class="notice err small" style="margin-top:8px">⚠️ Kapitelerkennung unsicher: ${b.structWarn.map(esc).join(' · ')}. Bitte nicht freigeben.</div>`;
+  return h;
+}
+function chapterPreviewList(sub, b) {
+  return `<details style="margin-top:8px"><summary class="small">Abschnitte ansehen (${b.chapters.length})</summary><ul class="list">${b.chapters.map(c => `<li class="item" style="display:block"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${c.cases ? ` · ${c.cases.length} Fälle` : ''}</div>${c.preview && !c.cases ? `<div class="tiny muted" style="font-style:italic">„${esc(c.preview.slice(0, 160))} …“</div>` : ''}</li>`).join('')}</ul></details>`;
 }
 
 function mountJobBar(el) { const b = el.querySelector('[data-jobs]'); if (b) renderJobBar(b); }
@@ -132,19 +143,20 @@ function tabStoff(el, sub) {
     if (role === 'faelle') {
       const nCases = b.chapters.reduce((a, c) => a + (c.cases?.length || 0), 0);
       const doneF = b.chapters.filter(c => c.cases).length;
-      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}</div></div>${bookAction(b, job)}
+      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}</div></div>${bookAction(b, job)}${bookNotes(b, sub)}
+        ${b.chapters.length ? chapterPreviewList(sub, b) : ''}
         ${nCases ? `<a class="btn secondary small" href="#/fach/${sub.id}/falltraining" style="margin-top:8px">Fälle ansehen und lösen</a>` : ''}</div>`;
     }
-    if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? 'wird nicht verwendet' : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
+    if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? (b.dupOf ? `ältere Auflage von „${esc(sub.books.find(x => x.fileId === b.dupOf)?.title || '')}“ – wird nicht verwendet` : 'wird nicht verwendet') : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
     return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div>${b.authors?.length ? `<div class="small">${esc(b.authors.join(' / '))}${b.edition ? ' · ' + esc(b.edition) : ''}</div>` : ''}<div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
-      <div class="row">${roleSel}</div></div>${bookAction(b, job)}
+      <div class="row">${roleSel}</div></div>${bookAction(b, job)}${bookNotes(b, sub)}
       ${b.error ? `<div class="notice err small">${esc(b.error)}</div>` : ''}
       <ul class="list">${b.chapters.map(c => {
         const p = prog[c.id];
         const scope = exam?.scopeMap?.[c.id];
         if (!isStudyChapter(c)) return `<li><a class="item" href="#/fach/${sub.id}/kapitel/${c.id}" style="opacity:.55"><span class="dot"></span><div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">kein Lernstoff – ausgeblendet</div></div><span class="chev">›</span></a></li>`;
         return `<li><a class="item" href="#/fach/${sub.id}/kapitel/${c.id}"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span>
-          <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div></div><span class="chev">›</span></a></li>`;
+          <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div>${!c.summary && c.preview ? `<div class="tiny muted" style="font-style:italic">„${esc(c.preview.slice(0, 140))} …“</div>` : ''}</div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
   el.querySelectorAll('[data-rename]').forEach(btn => btn.onclick = e => {
@@ -163,7 +175,7 @@ function tabStoff(el, sub) {
   });
   el.querySelectorAll('[data-role]').forEach(sel => sel.onchange = () => {
     const fid = sel.dataset.role, role = sel.value;
-    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); const before = bookRole(b); b.role = role;
+    store.update(s => { const b = s.subjects.find(x => x.id === sub.id).books.find(x => x.fileId === fid); const before = bookRole(b); b.role = role; b.roleManual = true; if (role !== 'aus') b.dupOf = null;
       if (role === 'nachschlag') { if (b.status !== 'nachschlagbar') b.status = 'neu'; }
       else if (role !== 'aus' && (before !== role || ['nachschlagbar', 'pausiert'].includes(b.status))) b.status = b.chapters?.length ? 'gegliedert' : 'neu'; });
     toast({ aus: 'Wird nicht verwendet – eine laufende Verarbeitung stoppt nach dem aktuellen Kapitel.', nachschlag: 'Nachschlagewerk – wird nur eingelesen, nicht zusammengefasst.', faelle: 'Fallsammlung – Fälle werden herausgelöst und den Lehrbuchkapiteln zugeordnet.', stoff: 'Lernstoff – wird verarbeitet.' }[role], 5000);
