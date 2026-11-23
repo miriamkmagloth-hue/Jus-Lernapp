@@ -225,7 +225,7 @@ export async function submitBatch(reqs) {
   const c = cfg();
   const requests = reqs.map(r => {
     const sys = BASE_RULES + '\n\n' + (r.system || '') + '\n\nAntworte AUSSCHLIESSLICH mit gültigem JSON ohne erklärenden Text davor oder danach.';
-    return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || (r.model === 'book' ? c.models.fast : null) || c.models.smart, max_tokens: r.maxTokens || 8000, thinking: { type: 'disabled' }, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.prompt }] } };
+    return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || (r.model === 'book' ? c.models.fast : null) || c.models.smart, max_tokens: r.maxTokens || 8000, thinking: { type: 'disabled' }, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.content || r.prompt }] } };
   });
   const res = await fetch(batchUrl('messages/batches'), { method: 'POST', headers: AH(c.key), body: JSON.stringify({ requests }) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');

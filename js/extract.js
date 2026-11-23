@@ -136,3 +136,24 @@ export const SUPPORTED = /\.(pdf|docx|txt|md|srt|vtt|rtf)$/i;
 export function isSupported(f) {
   return SUPPORTED.test(f.name || '') || f.mimeType === 'application/pdf' || f.mimeType === 'application/vnd.google-apps.document' || (f.mimeType || '').startsWith('text/');
 }
+
+
+// Eine PDF-Seite als JPEG (Base64) rendern – für Grafiken wie „Visualisierung“ im Lehrbuch
+export async function renderPdfPages(buffer, pageNumbers, { scale = 1.5, quality = 0.72 } = {}) {
+  const lib = await pdfjs();
+  const doc = await lib.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false }).promise;
+  const out = {};
+  for (const n of pageNumbers) {
+    const page = await doc.getPage(n);
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    out[n] = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+    page.cleanup();
+  }
+  try { await doc.destroy(); } catch {}
+  return out;
+}

@@ -459,6 +459,7 @@ export async function pollBatches(onDone = () => {}) {
         if (!r.ok) { failed++; firstErr = firstErr || r.error || ''; continue; }
         let j; try { j = parseJson(r.text); } catch (e) { failed++; firstErr = firstErr || 'Antwort nicht lesbar: ' + e.message; continue; }
         if (b.batch.kind === 'pool') { patchPool(sub.id, b.fileId, r.id, j.fragen); ok++; continue; }
+        if (b.batch.kind === 'vis') { patchVisual(sub.id, b.fileId, r.id, j); ok++; continue; }
         if (b.batch.kind === 'faelle') patchCases(sub.id, b.fileId, r.id, (j.faelle || []).filter(f => f && (f.sachverhalt || f.loesung)));
         else patchSummary(sub.id, b.fileId, r.id, j);
         ok++;
@@ -468,6 +469,7 @@ export async function pollBatches(onDone = () => {}) {
         const left = x.chapters.filter(c => isStudyChapter(c) && (b.batch.kind === 'pool' ? c.summary && !c.pool?.length : b.batch.kind === 'faelle' ? !c.cases : !c.summary)).length;
         const kind = b.batch.kind;
         x.batch = null; x.estimate = null;
+        if (kind === 'vis') { const miss = (x.visuals || []).filter(v => !v.schema).length; x.error = miss ? `Falllösungsschemata: ${miss} Grafik(en) konnten nicht gelesen werden${firstErr ? ` (Grund: ${firstErr})` : ''}.` : null; return; }
         if (kind === 'pool') { x.error = left ? `Fragenpool: ${left} Kapitel fehlen noch${firstErr ? ` (Grund: ${firstErr})` : ''}.` : null; return; }
         x.status = left ? 'bereit' : 'fertig';
         if (left) x.error = `${left} Kapitel konnten nicht verarbeitet werden${firstErr ? ` (Grund: ${firstErr})` : ''} – mit „Vorbereiten“ erneut versuchen.`;
@@ -989,4 +991,90 @@ export async function subjectContext(subId, question, maxChars = 45000) {
   const units = (sub.units || []).filter(u => u.analysis).map(u => `- ${u.title}: ${u.analysis.thema || ''} – ${(u.analysis.profBetont || []).map(x => x.hinweis).join('; ').slice(0, 400)}`).join('\n');
   const toc = sub.books.filter(b => bookRole(b) !== 'aus' && b.chapters?.length).map(b => `${b.title}: ${b.chapters.filter(isStudyChapter).map(c => c.title.replace(/^\d+\.\s*Kapitel:\s*/, '')).join(' | ')}`).join('\n');
   return { text: picked.map(p => `[${p.book} – ${p.chapter}, S. ${p.label}]\n${p.text}`).join('\n\n'), units, toc, n: picked.length };
+}
+
+
+// ---------- Falllösungsschemata: „Visualisierungen“ aus den Lehrbüchern + Sonderwissen ----------
+// Seiten mit einer Visualisierung finden (kostenlos)
+export function findVisualPages(book, pages) {
+  const out = [];
+  for (const p of pages) {
+    const lines = p.text.split('\n').map(l => l.trim()).filter(Boolean);
+    const i = lines.findIndex(l => /^VISUALISIERUNG\b/.test(l));
+    if (i < 0) continue;
+    let title = lines[i].replace(/^VISUALISIERUNG\s*/, '').trim();
+    if (!title) title = lines[i + 1] || '';
+    title = title.replace(/\s+\d+\/\d+.*$/, '').trim();
+    const ch = book.chapters.find(c => c.startPage <= p.n && c.endPage >= p.n);
+    out.push({ page: p.n, label: p.label, title: title ? title.charAt(0) + title.slice(1).toLowerCase() : 'Visualisierung', chapterId: ch?.id || null });
+  }
+  return out;
+}
+
+function specialKnowledge(ch) {
+  const s = ch?.summary || {};
+  return [
+    ...(s.themen || []).map(t => `### ${t.titel}${t.ebene === 'vertiefung' ? ' (Vertiefung)' : ''}\n${t.inhalt}`),
+    'DEFINITIONEN:\n' + (s.definitionen || []).map(d => `- ${d.begriff}: ${d.definition} [${d.seite || ''}]`).join('\n'),
+    'STOLPERFALLEN:\n' + (s.stolperfallen || []).map(x => `- ${x.text || x} [${x.seite || ''}]`).join('\n'),
+  ].join('\n\n');
+}
+
+function visualPrompt(book, ch, v) {
+  return `Das Bild zeigt die „Visualisierung“ von S. ${v.label} aus dem Lehrbuch „${book.title}“ (Kapitel „${ch?.title || '?'}“): ein Falllösungsschema.
+Übertrage die Grafik vollständig und in der richtigen Reihenfolge in ein Prüfungsschema und ergänze JEDEN Schritt um das Sonderwissen aus dem Kapitel (unten): Ausnahmen, Sonderfälle, Abgrenzungen, Stolperfallen, Definitionen – nur was im Kapitel steht, mit Seitenangabe. Nichts erfinden.
+JSON: {"titel": "…", "einleitung": "1–2 Sätze, wofür das Schema dient", "schritte": [{"schritt": "Text des Schritts wie in der Grafik", "erklaerung": "kurz, was hier zu prüfen ist", "sonderwissen": [{"text": "…", "seite": "S. …"}], "unterschritte": [ {…gleiches Format…} ]}], "hinweise": ["allgemeine Klausurtipps aus dem Kapitel"]}
+Verwende „ “ statt gerader Anführungszeichen.
+
+KAPITEL (Zusammenfassung als Quelle für das Sonderwissen):
+${clip(specialKnowledge(ch), 30000)}`;
+}
+
+export async function visualsEstimate(book, pages) {
+  const prov = store.state.settings.provider || 'anthropic';
+  const model = store.state.settings.models?.[prov]?.smart || 'sonnet';
+  const vis = findVisualPages(book, pages).filter(v => !(book.visuals || []).some(x => x.page === v.page && x.schema));
+  let usd = 0;
+  for (const v of vis) { const ch = book.chapters.find(c => c.id === v.chapterId); usd += estimate(model, Math.min(30000, specialKnowledge(ch).length) + 6000 + 5000, 3500, { batch: batchAvailable() }); }
+  return { n: vis.length, usd: Math.round(usd * 100) / 100, list: vis };
+}
+
+export async function buildVisuals(subId, fileId, onStatus = () => {}) {
+  const sub = store.subject(subId);
+  const book = sub.books.find(b => b.fileId === fileId);
+  const t = await getFileText(sub, fileId);
+  const todo = findVisualPages(book, t.pages).filter(v => !(book.visuals || []).some(x => x.page === v.page && x.schema));
+  if (!todo.length) return 0;
+  onStatus('Lade das Lehrbuch-PDF für die Grafiken …');
+  const f = sub.files[fileId];
+  const dl = await downloadFile({ id: fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name });
+  const { renderPdfPages } = await import('./extract.js');
+  onStatus(`Bereite ${todo.length} Grafiken vor …`);
+  const imgs = await renderPdfPages(dl.buffer, todo.map(v => v.page), { scale: 1.35, quality: 0.68 });
+  // Vercel nimmt höchstens ~4,5 MB pro Anfrage – bei sehr vielen Grafiken den Rest später nachschicken
+  let size = 0;
+  for (let k = 0; k < todo.length; k++) { size += (imgs[todo[k].page] || '').length + 40000; if (size > 3500000) { todo.length = k; break; } }
+  patchBook(subId, fileId, b => { b.visuals = [...(b.visuals || []).filter(x => !todo.some(v => v.page === x.page)), ...todo.map(v => ({ ...v, id: 'v' + v.page, schema: null }))]; });
+  const reqs = todo.map(v => {
+    const ch = book.chapters.find(c => c.id === v.chapterId);
+    return { id: 'v' + v.page, model: 'smart', maxTokens: 8000, system: 'Du überträgst Falllösungsschemata aus Lehrbuchgrafiken (österreichisches Recht) in Text und ergänzt sie um das Sonderwissen aus dem Kapitel.',
+      content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imgs[v.page] } }, { type: 'text', text: visualPrompt(book, ch, v) }] };
+  });
+  if (batchAvailable()) {
+    onStatus('Schicke die Grafiken an den Hintergrund-Modus …');
+    const { id, model } = await submitBatch(reqs);
+    patchBook(subId, fileId, b => { b.batch = { id, model, kind: 'vis', at: Date.now(), n: reqs.length }; });
+    return reqs.length;
+  }
+  let i = 0;
+  for (const r of reqs) {
+    i++; onStatus(`Lese Grafik ${i} von ${reqs.length} …`);
+    try { const j = await completeJson({ model: 'smart', maxTokens: r.maxTokens, system: r.system, messages: [{ role: 'user', content: r.content }], purpose: 'Falllösungsschemata', budgetExempt: true }); patchVisual(subId, fileId, r.id, j); }
+    catch (e) { console.warn(e); if (/401|403|credit|guthaben|api key|billing/i.test(e.message)) throw e; }
+  }
+  return reqs.length;
+}
+
+export function patchVisual(subId, fileId, id, schema) {
+  store.update(s => { const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId); const v = (b.visuals || []).find(x => x.id === id); if (v && schema && Array.isArray(schema.schritte)) v.schema = schema; });
 }

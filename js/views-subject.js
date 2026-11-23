@@ -4,13 +4,13 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, buildVisuals, visualsEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
 import { isSignedIn } from './drive.js';
 
-const TABS = [['plan', 'Übersicht'], ['chat', 'Chat'], ['stoff', 'Lehrbuch'], ['einheiten', 'Einheiten'], ['falltraining', 'Falltraining'], ['altklausuren', 'Altklausuren'], ['ogh', 'OGH-Urteile'], ['muendlich', 'Mündlich'], ['dateien', 'Dateien']];
+const TABS = [['plan', 'Übersicht'], ['chat', 'Chat'], ['stoff', 'Lehrbuch'], ['schemata', 'Falllösungsschemata'], ['einheiten', 'Einheiten'], ['falltraining', 'Falltraining'], ['altklausuren', 'Altklausuren'], ['ogh', 'OGH-Urteile'], ['muendlich', 'Mündlich'], ['dateien', 'Dateien']];
 
 export function renderJobBar(bar) {
   const subId = bar.dataset.jobs;
@@ -76,7 +76,7 @@ export function subjectView(el, subId, tab = 'plan') {
   el.innerHTML = header(sub, tab) + '<div id="tabBody"></div>';
   mountJobBar(el);
   const body = el.querySelector('#tabBody');
-  ({ plan: tabPlan, chat: tabChat, stoff: tabStoff, einheiten: tabUnits, falltraining: tabCases, altklausuren: tabAlt, ogh: tabOgh, muendlich: tabOral, dateien: tabFiles }[tab] || tabPlan)(body, sub);
+  ({ plan: tabPlan, chat: tabChat, schemata: tabSchemata, stoff: tabStoff, einheiten: tabUnits, falltraining: tabCases, altklausuren: tabAlt, ogh: tabOgh, muendlich: tabOral, dateien: tabFiles }[tab] || tabPlan)(body, sub);
 }
 
 // ---------- Übersicht ----------
@@ -163,6 +163,78 @@ ${ctx.text || '(keine passenden Stellen gefunden)'}`;
       { label: 'Kleiner Fall', prompt: 'Gib mir einen kurzen Klausurfall zu einem zentralen Thema. Ich löse ihn, dann korrigierst du mich nach der Anspruchsprüfung.' }
     ]
   });
+}
+
+// ---------- Falllösungsschemata ----------
+const schemaState = {};
+function stepHtml(st, depth = 0) {
+  const sw = (st.sonderwissen || []).filter(x => x && (x.text || typeof x === 'string'));
+  return `<li style="margin:6px 0"><div><strong>${enrich(esc(st.schritt || ''))}</strong>${st.erklaerung ? `<div class="small">${enrich(esc(st.erklaerung))}</div>` : ''}</div>
+    ${sw.length ? `<ul class="small" style="margin:4px 0 0 0;padding-left:18px">${sw.map(x => `<li>💡 ${enrich(esc(x.text || x))}${x.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</li>`).join('')}</ul>` : ''}
+    ${(st.unterschritte || []).length ? `<ol type="${depth ? 'i' : 'a'}" style="padding-left:20px">${st.unterschritte.map(u => stepHtml(u, depth + 1)).join('')}</ol>` : ''}</li>`;
+}
+function tabSchemata(el, sub) {
+  const state = schemaState[sub.id] ||= { book: '' };
+  const draw = () => {
+    sub = store.subject(sub.id);
+    const books = sub.books.filter(b => bookRole(b) === 'stoff' && b.chapters?.length);
+    const shown = state.book ? books.filter(b => b.fileId === state.book) : books;
+    const totalVis = books.reduce((a, b) => a + (b.visuals || []).filter(v => v.schema).length, 0);
+    const running = books.filter(b => b.batch?.kind === 'vis');
+    let html = `<div class="card"><p class="small" style="margin-top:0">Die <strong>Visualisierungen</strong> aus deinen Lehrbüchern als Schritt-für-Schritt-Schema – jeder Schritt ergänzt um das <strong>Sonderwissen</strong> aus dem Kapitel (Ausnahmen, Abgrenzungen, Stolperfallen) mit Seitenangaben. Darunter je Kapitel die Prüfungsschemata aus dem Text.</p>
+      ${running.length ? `<div class="notice small">⏳ Grafiken werden im Hintergrund gelesen: ${running.map(b => esc(b.title)).join(', ')} – erscheinen hier automatisch (meist unter einer Stunde).</div>` : ''}
+      ${books.some(b => !b.batch && !(b.visuals || []).length || (b.visuals || []).some(v => !v.schema) && !b.batch) ? `<button class="btn small" data-a="allvis">Grafiken aus allen Büchern einlesen</button> <span class="tiny muted">einmalig, Kosten werden vorher angezeigt</span>` : totalVis ? `<div class="small muted">🧭 ${totalVis} Schemata aus Visualisierungen vorhanden.</div>` : ''}
+      <div style="margin-top:10px"><select id="sbook"><option value="">Alle Bücher</option>${books.map(b => `<option value="${b.fileId}" ${state.book === b.fileId ? 'selected' : ''}>${esc(b.title)}</option>`).join('')}</select></div></div>`;
+    for (const b of shown) {
+      const byCh = new Map();
+      for (const v of (b.visuals || []).filter(v => v.schema)) (byCh.get(v.chapterId) || byCh.set(v.chapterId, []).get(v.chapterId)).push(v);
+      const chs = b.chapters.filter(c => isStudyChapter(c) && (byCh.has(c.id) || (c.summary?.schemata || []).length));
+      if (!chs.length) continue;
+      html += `<h3 style="margin:18px 4px 8px">${esc(b.title)}</h3>`;
+      for (const c of chs) {
+        html += `<div class="card"><div class="small muted">${esc(c.title)}</div>`;
+        for (const v of byCh.get(c.id) || []) {
+          const sc = v.schema;
+          html += `<div style="margin:10px 0 14px"><div class="row between"><div class="item-title">🧭 ${esc(sc.titel || v.title)}</div><button class="btn ghost small" data-orig="${b.fileId}|${v.page}">Originalgrafik (S. ${esc(v.label)})</button></div>
+            ${sc.einleitung ? `<div class="small muted">${enrich(esc(sc.einleitung))}</div>` : ''}
+            <ol style="padding-left:20px">${(sc.schritte || []).map(st => stepHtml(st)).join('')}</ol>
+            ${(sc.hinweise || []).length ? `<div class="notice small">${sc.hinweise.map(h => '✓ ' + enrich(esc(h))).join('<br>')}</div>` : ''}</div>`;
+        }
+        const ts = c.summary?.schemata || [];
+        if (ts.length) html += `<details ${byCh.has(c.id) ? '' : 'open'}><summary class="small">Prüfungsschemata aus dem Text (${ts.length})</summary>${ts.map(x => `<div style="margin:8px 0"><strong class="small">${esc(x.titel || '')}</strong><ol class="small" style="padding-left:20px">${(x.schritte || []).map(st => `<li>${enrich(esc(String(st).replace(/^\d+\.\s*/, '')))}</li>`).join('')}</ol></div>`).join('')}</details>`;
+        html += `</div>`;
+      }
+    }
+    el.innerHTML = html;
+    el.querySelector('#sbook').onchange = e => { state.book = e.target.value; draw(); };
+  };
+  el.onclick = async e => {
+    const o = e.target.closest('[data-orig]');
+    if (o) {
+      const [fid, page] = o.dataset.orig.split('|');
+      const card = openModal(`<div class="row between"><h3 style="margin:0">Originalgrafik</h3><button class="btn ghost small" data-close>✕</button></div><div id="origimg">${busy('Lade die Seite aus dem Lehrbuch …')}</div>`, c => c.querySelector('[data-close]').onclick = closeModal);
+      try {
+        const { downloadFile } = await import('./drive.js'); const { renderPdfPages } = await import('./extract.js');
+        const f = sub.files[fid];
+        const dl = await downloadFile({ id: fid, mimeType: f?.mimeType || 'application/pdf', name: f?.name });
+        const img = await renderPdfPages(dl.buffer, [+page], { scale: 2, quality: 0.85 });
+        card.querySelector('#origimg').innerHTML = `<img src="data:image/jpeg;base64,${img[page]}" style="width:100%;border-radius:8px">`;
+      } catch (err) { card.querySelector('#origimg').innerHTML = errorBox(err); }
+      return;
+    }
+    if (e.target.closest('[data-a=allvis]')) {
+      const btn = e.target.closest('button'); btn.disabled = true; btn.textContent = 'Suche Grafiken und berechne Kosten …';
+      const books = sub.books.filter(b => bookRole(b) === 'stoff' && b.chapters?.length && !b.batch);
+      let n = 0, usd = 0; const todo = [];
+      for (const b of books) { try { const t = await getFileText(sub, b.fileId); const est = await visualsEstimate(b, t.pages); if (est.n) { todo.push(b); n += est.n; usd += est.usd; } } catch (err) { console.warn(err); } }
+      if (!n) { toast('Keine neuen Visualisierungen gefunden.'); draw(); return; }
+      const ok = await confirmDialog(`${n} Visualisierungen in ${todo.length} Büchern einlesen und um das Sonderwissen ergänzen – einmalig ca. ${usd.toLocaleString('de-AT', { minimumFractionDigits: 2 })} $ (Hintergrund-Modus, halber Preis). Danach kostenlos verfügbar.`, 'Ja, einlesen');
+      if (!ok) { draw(); return; }
+      for (const b of todo) runJob('vis:' + b.fileId, `Falllösungsschemata aus „${b.title}“`, st => buildVisuals(sub.id, b.fileId, st), { subId: sub.id });
+      setTimeout(draw, 1500);
+    }
+  };
+  draw();
 }
 
 // ---------- Lehrbuch / Stoffgebiete ----------
