@@ -1,4 +1,5 @@
 // Google Drive: Anmeldung, Ordner durchsuchen, Dateien laden, Zustand synchronisieren
+import { mergeStates } from './merge.js';
 import { store, local } from './store.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.appdata';
@@ -216,10 +217,17 @@ async function findStateFile() {
   return stateFileId;
 }
 
+let lastRemoteVersion = null;
+async function remoteVersion(id) {
+  try { return (await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=version`)).json()).version || null; } catch { return null; }
+}
 async function readRemoteState() {
   const id = await findStateFile();
   if (!id) return null;
-  return (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json();
+  const v = await remoteVersion(id);
+  const j = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json();
+  lastRemoteVersion = v;
+  return j;
 }
 
 let saving = false, saveAgain = false;
@@ -228,16 +236,26 @@ export async function writeRemoteState() {
   if (saving) { saveAgain = true; return; }
   saving = true; setSync('speichert');
   try {
-    const body = JSON.stringify(store.state);
     const id = await findStateFile();
+    // Hat ein anderes Gerät inzwischen gespeichert? Dann zuerst zusammenführen statt überschreiben
+    if (id) {
+      const v = await remoteVersion(id);
+      if (v && v !== lastRemoteVersion) {
+        const remote = await (await gfetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json();
+        store.replace(mergeStates(store.state, remote), { keepTime: true });
+      }
+    }
+    const body = JSON.stringify(store.state);
     if (id) {
       await gfetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body });
+      lastRemoteVersion = await remoteVersion(id);
     } else {
       const boundary = 'b' + Math.random().toString(36).slice(2);
       const meta = { name: STATE_FILE, parents: ['appDataFolder'] };
       const multipart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
       const j = await (await gfetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body: multipart })).json();
       stateFileId = j.id;
+      lastRemoteVersion = await remoteVersion(j.id);
     }
     setSync('synchron');
   } catch (e) {
@@ -253,13 +271,18 @@ export async function syncOnStart() {
   setSync('lädt');
   const remote = await readRemoteState();
   const localEmpty = !store.state.subjects.length;
-  if (remote && ((remote.updatedAt || 0) > (store.state.updatedAt || 0) || (localEmpty && remote.subjects?.length))) {
-    // auf einem neuen Gerät: Drive-Stand übernehmen, lokal eingetragene Schlüssel behalten
+  if (remote && localEmpty) {
+    // neues Gerät: Drive-Stand übernehmen, lokal eingetragene Schlüssel behalten
     const localKeys = store.state.settings.keys || {};
     remote.settings = remote.settings || {};
     remote.settings.keys = { ...localKeys, ...Object.fromEntries(Object.entries(remote.settings.keys || {}).filter(([, v]) => v)) };
     store.replace(remote);
-  } else if (!remote || (store.state.updatedAt || 0) > (remote.updatedAt || 0)) {
+  } else if (remote) {
+    // beide Stände zusammenführen – nichts Erarbeitetes geht verloren
+    const merged = mergeStates(store.state, remote);
+    store.replace(merged);
+    if (JSON.stringify(merged) !== JSON.stringify(remote)) await writeRemoteState();
+  } else {
     await writeRemoteState();
   }
   setSync('synchron');
