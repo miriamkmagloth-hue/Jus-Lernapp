@@ -22,7 +22,11 @@ async function risFetch(kind, path, asText = false) {
   for (const b of tries) {
     try {
       const res = await fetch((kind === 'api' ? b.api : b.doc) + path, { headers: kind === 'api' ? { Accept: 'application/json' } : {} });
-      if (!res.ok) throw new Error('RIS ' + res.status);
+      if (!res.ok) {
+        // Das RIS liefert manche Normseiten mit Status 404 aus, obwohl der Text vollständig dabei ist
+        if (kind === 'doc' && res.status === 404 && asText) { const t = await res.text(); if (/<h3>\s*Text\s*<\/h3>|Rechtssatz/.test(t)) { workingBase = b; return t; } }
+        throw new Error('RIS ' + res.status);
+      }
       const ct = res.headers.get('content-type') || '';
       if (kind === 'api' && !ct.includes('json')) throw new Error('RIS: keine JSON-Antwort');
       workingBase = b;
