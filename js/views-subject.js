@@ -870,7 +870,7 @@ function tabBegriffe(el, sub) {
     if (!cur) html += `<div class="card" style="text-align:center"><p>🎉 Für heute ist alles gelernt.</p><button class="btn secondary small" data-a="extra">Trotzdem weiter üben</button></div>`;
     else html += `<div class="card term-card"><div class="tiny muted">${esc(cur.bookTitle)} · ${esc(cur.chapter)} ${cur.ebene === 'vertiefung' ? '· <span class="pill gold">Vertiefung</span>' : ''}</div>
       <div class="term" style="margin:14px 0">${esc(cur.begriff)}</div>
-      ${shown ? `<div style="text-align:left">${enrich(esc(cur.definition))}${cur.seite ? ` <span class="cite">[${esc(String(cur.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div>
+      ${shown ? `<div style="text-align:left">${enrich(esc(cur.definition))}${cur.seite && !/\[S\./.test(cur.definition) ? ` <span class="cite">[${esc(String(cur.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div>
         <div class="row" style="justify-content:center;margin-top:14px;gap:6px"><button class="btn secondary small" data-r="0">Nicht gewusst</button><button class="btn secondary small" data-r="1">Ungefähr</button><button class="btn small" data-r="2">Gewusst</button></div>`
         : `<div><button class="btn" data-a="show">Aufdecken</button></div><p class="tiny muted" style="margin-top:10px">Erst selbst erklären, dann aufdecken.</p>`}
       <div style="margin-top:12px"><button class="btn ghost small" data-a="hide" title="Kommt nicht mehr vor">Allgemeinwortschatz – ausblenden</button></div></div>
@@ -883,7 +883,7 @@ function tabBegriffe(el, sub) {
     const q = st.q.toLowerCase();
     const shownList = q ? list.filter(t => (t.begriff + ' ' + t.definition).toLowerCase().includes(q)) : list;
     el.innerHTML = header(list) + `<input type="text" id="tq" placeholder="Begriff suchen …" value="${esc(st.q)}" style="margin-bottom:10px">
-      <div class="card"><ul class="list">${shownList.sort((a, b) => a.begriff.localeCompare(b.begriff, 'de')).slice(0, 400).map(t => `<li style="display:block;padding:8px 0"><strong>${esc(t.begriff)}</strong> <span class="tiny muted">${esc(t.chapter)}</span><div class="small">${enrich(esc(t.definition))}${t.seite ? ` <span class="cite">[${esc(String(t.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div></li>`).join('') || '<li class="muted small">Keine Treffer.</li>'}</ul></div>
+      <div class="card"><ul class="list">${shownList.sort((a, b) => a.begriff.localeCompare(b.begriff, 'de')).slice(0, 400).map(t => `<li style="display:block;padding:8px 0"><strong>${esc(t.begriff)}</strong> <span class="tiny muted">${esc(t.chapter)}</span><div class="small">${enrich(esc(t.definition))}${t.seite && !/\[S\./.test(t.definition) ? ` <span class="cite">[${esc(String(t.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div></li>`).join('') || '<li class="muted small">Keine Treffer.</li>'}</ul></div>
       ${Object.keys(hidden()).length ? `<div class="card small"><details><summary>Ausgeblendete Begriffe (${Object.keys(hidden()).length})</summary>${Object.keys(hidden()).map(k => `<button class="btn ghost small" data-unhide="${esc(k)}">↺ ${esc(k)}</button>`).join(' ')}</details></div>` : ''}`;
     bindHeader();
     const tq = el.querySelector('#tq'); tq.oninput = () => { st.q = tq.value; clearTimeout(el._t); el._t = setTimeout(() => { drawList(); const x = el.querySelector('#tq'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }, 300); };
