@@ -4,7 +4,7 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, buildVisuals, visualsEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, buildVisuals, visualsEstimate, buildSkript, skriptEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
@@ -244,7 +244,10 @@ function tabStoff(el, sub) {
   const exam = activeExams(sub)[0];
   const roleOrder = { stoff: 0, faelle: 1, nachschlag: 2, aus: 3 };
   const books = [...sub.books].sort((a, b) => roleOrder[bookRole(a)] - roleOrder[bookRole(b)]);
-  el.innerHTML = `<div class="notice small">Leg pro Buch fest, wofür es da ist: <strong>Lernstoff</strong> wird zusammengefasst und abgefragt, <strong>Fallsammlung</strong>: Fälle samt Buchlösung werden herausgelöst und den Lehrbuchkapiteln zugeordnet, <strong>Nachschlagewerk</strong> (z. B. Gesetzestext) wird nur eingelesen, damit du Paragraphen antippen kannst, <strong>Nicht verwenden</strong> wird ignoriert. Welche Bücher zu welcher Prüfung gehören, stellst du im Lernplan der Prüfung ein.</div>` + books.map(b => {
+  const navBooks = books.filter(b => bookRole(b) !== 'aus');
+  const shortT = t => { const m = String(t).match(/^Zivilrecht\s+([IVX]+)\b/); return m ? 'ZR ' + m[1] : String(t).replace(/\s+–.*$/, '').slice(0, 28); };
+  el.innerHTML = `<div class="card" style="position:sticky;top:0;z-index:5;padding:10px 12px"><div class="row" style="gap:6px;flex-wrap:wrap">${navBooks.map(b => `<button class="tab" data-goto="${b.fileId}">${bookRole(b) === 'faelle' ? '📝' : bookRole(b) === 'stoff' ? '📘' : '📖'} ${esc(shortT(b.title))}</button>`).join('')}</div></div>
+  <div class="notice small">Leg pro Buch fest, wofür es da ist: <strong>Lernstoff</strong> wird zusammengefasst und abgefragt, <strong>Fallsammlung</strong>: Fälle samt Buchlösung werden herausgelöst und den Lehrbuchkapiteln zugeordnet, <strong>Nachschlagewerk</strong> (z. B. Gesetzestext) wird nur eingelesen, damit du Paragraphen antippen kannst, <strong>Nicht verwenden</strong> wird ignoriert. Welche Bücher zu welcher Prüfung gehören, stellst du im Lernplan der Prüfung ein.</div>` + books.map(b => {
     const job = jobs.get('book:' + b.fileId);
     const role = bookRole(b);
     const done = b.chapters.filter(c => c.summary).length;
@@ -252,13 +255,14 @@ function tabStoff(el, sub) {
     if (role === 'faelle') {
       const nCases = b.chapters.reduce((a, c) => a + (c.cases?.length || 0), 0);
       const doneF = b.chapters.filter(c => c.cases).length;
-      return `<div class="card"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}</div></div>${bookAction(b, job)}${bookNotes(b, sub)}
+      return `<div class="card" id="buch-${b.fileId}"><div class="row between"><div><div class="item-title">📝 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">Fallsammlung · ${nCases} Fälle aus ${doneF} von ${b.chapters.length} Abschnitten${job && !job.done ? ' · wird verarbeitet …' : ''}</div></div><div class="row">${roleSel}</div></div>${bookAction(b, job)}${bookNotes(b, sub)}
         ${b.chapters.length ? chapterPreviewList(sub, b) : ''}
         ${nCases ? `<a class="btn secondary small" href="#/fach/${sub.id}/falltraining" style="margin-top:8px">Fälle ansehen und lösen</a>` : ''}</div>`;
     }
-    if (role !== 'stoff') return `<div class="card" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? (b.dupOf ? `ältere Auflage von „${esc(sub.books.find(x => x.fileId === b.dupOf)?.title || '')}“ – wird nicht verwendet` : 'wird nicht verwendet') : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
-    return `<div class="card"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div>${b.authors?.length ? `<div class="small">${esc(b.authors.join(' / '))}${b.edition ? ' · ' + esc(b.edition) : ''}</div>` : ''}<div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
+    if (role !== 'stoff') return `<div class="card" id="buch-${b.fileId}" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? (b.dupOf ? `ältere Auflage von „${esc(sub.books.find(x => x.fileId === b.dupOf)?.title || '')}“ – wird nicht verwendet` : 'wird nicht verwendet') : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
+    return `<div class="card" id="buch-${b.fileId}"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div>${b.authors?.length ? `<div class="small">${esc(b.authors.join(' / '))}${b.edition ? ' · ' + esc(b.edition) : ''}</div>` : ''}<div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
       <div class="row">${roleSel}</div></div>${bookAction(b, job)}${bookNotes(b, sub)}
+      ${b.chapters.some(c => c.summary) ? `<div style="margin-top:8px"><a class="btn secondary small" href="#/fach/${sub.id}/skript/${b.fileId}">📄 Falllösungs-Skript zum ganzen Buch</a></div>` : ''}
       ${b.error ? `<div class="notice err small">${esc(b.error)}</div>` : ''}
       <ul class="list">${b.chapters.map(c => {
         const p = prog[c.id];
@@ -268,6 +272,7 @@ function tabStoff(el, sub) {
           <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div>${!c.summary && c.preview ? `<div class="tiny muted" style="font-style:italic">„${esc(c.preview.slice(0, 140))} …“</div>` : ''}</div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
+  el.querySelectorAll('[data-goto]').forEach(btn => btn.onclick = () => { const t = el.querySelector('#buch-' + CSS.escape(btn.dataset.goto)); if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - 70, behavior: 'smooth' }); });
   el.querySelectorAll('[data-rename]').forEach(btn => btn.onclick = e => {
     e.preventDefault();
     const b = sub.books.find(x => x.fileId === btn.dataset.rename);
@@ -766,4 +771,60 @@ export function examView(el, subId, examId) {
     }
     if (a === 'noscope') { store.update(s => { const ex = s.subjects.find(x => x.id === subId).exams.find(x => x.id === examId); ex.scopeMap = null; ex.scopeNotes = ''; }); render(); }
   };
+}
+
+
+// ---------- Falllösungs-Skript: ein Dokument pro Buch ----------
+export function skriptView(el, subId, fileId) {
+  const draw = () => {
+    const sub = store.subject(subId);
+    const b = sub?.books.find(x => x.fileId === fileId);
+    if (!b) { el.innerHTML = '<div class="card">Buch nicht gefunden.</div>'; return; }
+    setTitle('Falllösungs-Skript');
+    const chs = b.chapters.filter(isStudyChapter);
+    const missing = chs.filter(c => !c.skript).length;
+    const running = sub.books.filter(x => x.batch?.kind === 'skript');
+    const books = sub.books.filter(x => bookRole(x) === 'stoff' && x.chapters?.length);
+    const allMissing = books.reduce((a, x) => a + x.chapters.filter(c => isStudyChapter(c) && !c.skript).length, 0);
+    const cite = x => x?.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : '';
+    const li = arr => (arr || []).map(x => `<li>${enrich(esc(x.text || x))}${cite(x)}</li>`).join('');
+    let html = `<div class="card no-print"><div class="row between"><div><div class="item-title">📄 ${esc(b.title)}</div><div class="small muted">Alles, was du zum Lösen von Fällen brauchst – Kapitel für Kapitel, mit Fußnoten, Rechtsprechung und Beispielen aus dem Buch.</div></div>
+      <div class="row"><a class="btn ghost small" href="#/fach/${subId}/stoff">‹ Lehrbuch</a>${!missing ? '<button class="btn secondary small" data-a="print">Drucken / PDF</button>' : ''}</div></div>
+      ${running.length ? `<div class="notice small" style="margin-top:8px">⏳ Wird im Hintergrund erstellt: ${running.map(x => esc(x.title)).join(', ')} – erscheint hier automatisch (meist unter einer Stunde).</div>`
+        : missing ? `<div class="notice gold small" style="margin-top:8px">Für ${missing} von ${chs.length} Kapiteln gibt es das Skript noch nicht. Es wird einmalig aus dem vollständigen Kapiteltext erstellt (inkl. Fußnoten) – danach kostenlos.<div style="margin-top:6px"><button class="btn small" data-a="make">Skripten für alle Bücher erstellen</button> <span class="tiny muted">${allMissing} Kapitel · Kosten werden vorher angezeigt</span></div></div>` : ''}</div>`;
+    html += `<div class="card"><h3 style="margin-top:0">Inhalt</h3><ol class="small" style="padding-left:20px">${chs.map(c => `<li><a href="#" data-jump="${c.id}">${esc(c.title)}</a>${c.skript ? '' : ' <span class="muted">(noch offen)</span>'}</li>`).join('')}</ol></div>`;
+    for (const c of chs) {
+      const k = c.skript;
+      const vis = (b.visuals || []).filter(v => v.chapterId === c.id && v.schema);
+      html += `<div class="card skript-ch" id="sk-${c.id}"><h3 style="margin-top:0">${esc(c.title)} <span class="tiny muted">S. ${esc(c.startLabel || '')}–${esc(c.endLabel || '')}</span></h3>`;
+      if (!k) { html += `<div class="small muted">Noch nicht erstellt.${c.summary?.kurzfassung ? ' Kurzfassung: ' + enrich(esc(c.summary.kurzfassung)) : ''}</div></div>`; continue; }
+      if (k.kernaussage) html += `<p class="small"><strong>Worum es im Fall geht:</strong> ${enrich(esc(k.kernaussage))}</p>`;
+      if ((k.anspruchsgrundlagen || []).length) html += `<div class="small"><strong>Anspruchsgrundlagen</strong><ul>${k.anspruchsgrundlagen.map(a => `<li>${enrich(esc(a.norm || ''))} – ${enrich(esc(a.wofuer || ''))}${cite(a)}</li>`).join('')}</ul></div>`;
+      if ((k.pruefung || []).length) html += `<div class="small"><strong>Prüfung im Fall</strong><ol style="padding-left:20px">${k.pruefung.map(p => `<li style="margin:6px 0"><strong>${enrich(esc(p.punkt || ''))}</strong>${cite(p)}${(p.voraussetzungen || []).length ? `<ul>${p.voraussetzungen.map(v => `<li>${enrich(esc(v))}</li>`).join('')}</ul>` : ''}${p.details ? `<div>${enrich(esc(p.details))}</div>` : ''}</li>`).join('')}</ol></div>`;
+      for (const v of vis) html += `<details class="small"><summary>🧭 Schema aus der Visualisierung: ${esc(v.schema.titel || v.title)}</summary><ol style="padding-left:20px">${(v.schema.schritte || []).map(st => `<li><strong>${enrich(esc(st.schritt || ''))}</strong>${st.erklaerung ? ' – ' + enrich(esc(st.erklaerung)) : ''}</li>`).join('')}</ol></details>`;
+      if ((k.klausurfallen || []).length) html += `<div class="small"><strong>⚠️ Klausurfallen</strong><ul>${li(k.klausurfallen)}</ul></div>`;
+      if ((k.rechtsprechung || []).length) html += `<div class="small"><strong>⚖️ Rechtsprechung, Fußnoten, Meinungsstreit</strong><ul>${li(k.rechtsprechung)}</ul></div>`;
+      if ((k.beispiele || []).length) html += `<div class="small"><strong>💡 Beispiele aus dem Buch</strong><ul>${li(k.beispiele)}</ul></div>`;
+      html += `</div>`;
+    }
+    el.innerHTML = html;
+  };
+  el.onclick = async e => {
+    const j = e.target.closest('[data-jump]');
+    if (j) { e.preventDefault(); const t = el.querySelector('#sk-' + CSS.escape(j.dataset.jump)); if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - 60, behavior: 'smooth' }); return; }
+    if (e.target.closest('[data-a=print]')) { window.print(); return; }
+    if (e.target.closest('[data-a=make]')) {
+      const btn = e.target.closest('button'); btn.disabled = true; btn.textContent = 'Berechne Kosten …';
+      const sub = store.subject(subId);
+      const books = sub.books.filter(x => bookRole(x) === 'stoff' && x.chapters?.length && !x.batch && x.chapters.some(c => isStudyChapter(c) && !c.skript));
+      const pages = {};
+      for (const x of books) pages[x.fileId] = (await getFileText(sub, x.fileId)).pages;
+      const est = skriptEstimate(books, pages);
+      const ok = await confirmDialog(`Falllösungs-Skripten für ${est.n} Kapitel in ${books.length} Büchern erstellen – einmalig ca. ${Math.max(est.usd, 0.01).toLocaleString('de-AT', { minimumFractionDigits: 2 })} $ (günstiges Modell, Hintergrund-Modus). Danach kostenlos.`, 'Ja, erstellen');
+      if (!ok) { draw(); return; }
+      for (const x of books) runJob('skript:' + x.fileId, `Falllösungs-Skript „${x.title}“`, st => buildSkript(subId, x.fileId, st), { subId });
+      setTimeout(draw, 2000);
+    }
+  };
+  draw();
 }

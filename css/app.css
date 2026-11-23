@@ -213,3 +213,12 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
   body.on-netlify .chat-input { bottom: 70px; }
   body.on-netlify .toast { bottom: 90px; }
 }
+
+/* Drucken (Falllösungs-Skript als PDF) */
+@media print {
+  nav, header, .tabbar, .no-print, #jobBar, .bottom-nav { display: none !important; }
+  body, .card { background: #fff !important; box-shadow: none !important; }
+  .card { border: none !important; break-inside: auto; }
+  .skript-ch { break-before: auto; }
+  a.norm, a.norm-ext { border: none; color: inherit; }
+}

@@ -460,6 +460,7 @@ export async function pollBatches(onDone = () => {}) {
         let j; try { j = parseJson(r.text); } catch (e) { failed++; firstErr = firstErr || 'Antwort nicht lesbar: ' + e.message; continue; }
         if (b.batch.kind === 'pool') { patchPool(sub.id, b.fileId, r.id, j.fragen); ok++; continue; }
         if (b.batch.kind === 'vis') { patchVisual(sub.id, b.fileId, r.id, j); ok++; continue; }
+        if (b.batch.kind === 'skript') { patchSkript(sub.id, b.fileId, r.id, j); ok++; continue; }
         if (b.batch.kind === 'faelle') patchCases(sub.id, b.fileId, r.id, (j.faelle || []).filter(f => f && (f.sachverhalt || f.loesung)));
         else patchSummary(sub.id, b.fileId, r.id, j);
         ok++;
@@ -469,6 +470,7 @@ export async function pollBatches(onDone = () => {}) {
         const left = x.chapters.filter(c => isStudyChapter(c) && (b.batch.kind === 'pool' ? c.summary && !c.pool?.length : b.batch.kind === 'faelle' ? !c.cases : !c.summary)).length;
         const kind = b.batch.kind;
         x.batch = null; x.estimate = null;
+        if (kind === 'skript') { const miss = x.chapters.filter(c => isStudyChapter(c) && !c.skript).length; x.error = miss ? `Falllösungs-Skript: ${miss} Kapitel fehlen noch${firstErr ? ` (Grund: ${firstErr})` : ''}.` : null; return; }
         if (kind === 'vis') { const miss = (x.visuals || []).filter(v => !v.schema).length; x.error = miss ? `Falllösungsschemata: ${miss} Grafik(en) konnten nicht gelesen werden${firstErr ? ` (Grund: ${firstErr})` : ''}.` : null; return; }
         if (kind === 'pool') { x.error = left ? `Fragenpool: ${left} Kapitel fehlen noch${firstErr ? ` (Grund: ${firstErr})` : ''}.` : null; return; }
         x.status = left ? 'bereit' : 'fertig';
@@ -1077,4 +1079,46 @@ export async function buildVisuals(subId, fileId, onStatus = () => {}) {
 
 export function patchVisual(subId, fileId, id, schema) {
   store.update(s => { const b = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId); const v = (b.visuals || []).find(x => x.id === id); if (v && schema && Array.isArray(schema.schritte)) v.schema = schema; });
+}
+
+
+// ---------- Falllösungs-Skript pro Buch (aus dem vollen Kapiteltext, Fokus Falllösung) ----------
+function skriptPrompt(book, ch, text) {
+  return {
+    maxTokens: 12000,
+    system: 'Du erstellst aus einem Lehrbuchkapitel (österreichisches Zivilrecht) ein Falllösungs-Skript: alles, was man braucht, um Klausurfälle zu lösen. Nur Inhalte aus dem Kapiteltext, nichts hinzufügen. Fußnoten, Randbemerkungen, Beispiele und zitierte Rechtsprechung sind ausdrücklich mitzunehmen, wenn sie für die Falllösung relevant sind. Jede Aussage mit Seitenangabe [S. x].',
+    prompt: `Lehrbuch: „${book.title}“\nKapitel: „${ch.title}“\n\nJSON (kurze Felder zuerst, präzise, keine Wiederholungen; verwende „ “ statt gerader Anführungszeichen):\n{\n "kernaussage": "2–3 Sätze: welche Fallfragen dieses Kapitel löst",\n "anspruchsgrundlagen": [{"norm": "§ … ABGB", "wofuer": "welcher Anspruch / welche Rechtsfolge", "seite": "S. …"}],\n "klausurfallen": [{"text": "typischer Fehler / Abgrenzung, die in Fällen geprüft wird", "seite": "S. …"}],\n "rechtsprechung": [{"text": "Aussage aus Rsp, Fußnote oder Mindermeinung, die für die Lösung wichtig ist (mit GZ, wenn genannt)", "seite": "S. …"}],\n "beispiele": [{"text": "Fallbeispiel aus dem Buch mit Lösung in einem Satz", "seite": "S. …"}],\n "pruefung": [{"punkt": "Prüfungspunkt in Klausur-Reihenfolge", "voraussetzungen": ["…"], "details": "was im Fall konkret zu prüfen ist, inkl. Sonderfälle und Ausnahmen", "seite": "S. …"}]\n}\n\nKAPITELTEXT:\n${clip(text, 320000)}`
+  };
+}
+export function skriptEstimate(books, pagesByBook) {
+  const prov = store.state.settings.provider || 'anthropic';
+  const mm = store.state.settings.models?.[prov] || {};
+  const model = mm.book || mm.fast || mm.smart || 'sonnet';
+  let usd = 0, n = 0;
+  for (const b of books) for (const c of b.chapters.filter(c => isStudyChapter(c) && !c.skript)) { n++; usd += estimate(model, pagesToText(pagesByBook[b.fileId], c.startPage, c.endPage).length, 7000, { batch: batchAvailable() }); }
+  return { n, usd: Math.round(usd * 100) / 100 };
+}
+export async function buildSkript(subId, fileId, onStatus = () => {}) {
+  const sub = store.subject(subId);
+  const book = sub.books.find(b => b.fileId === fileId);
+  const t = await getFileText(sub, fileId);
+  const chs = book.chapters.filter(c => isStudyChapter(c) && !c.skript);
+  if (!chs.length) return 0;
+  const reqs = chs.map(ch => { const pr = skriptPrompt(book, ch, pagesToText(t.pages, ch.startPage, ch.endPage)); return { id: ch.id, system: pr.system, prompt: pr.prompt, maxTokens: pr.maxTokens, model: 'book' }; });
+  if (batchAvailable()) {
+    onStatus('Schicke die Kapitel an den Hintergrund-Modus …');
+    const { id, model } = await submitBatch(reqs);
+    patchBook(subId, fileId, b => { b.batch = { id, model, kind: 'skript', at: Date.now(), n: reqs.length }; });
+    return reqs.length;
+  }
+  let i = 0;
+  for (const r of reqs) {
+    i++; onStatus(`Falllösungs-Skript (${i} von ${reqs.length}) …`);
+    try { const j = await completeJson({ model: 'book', maxTokens: r.maxTokens, system: r.system, messages: [{ role: 'user', content: r.prompt }], purpose: 'Falllösungs-Skript', budgetExempt: true }); patchSkript(subId, fileId, r.id, j); }
+    catch (e) { console.warn(e); if (/401|403|credit|guthaben|api key|billing/i.test(e.message)) throw e; }
+  }
+  return reqs.length;
+}
+export function patchSkript(subId, fileId, chId, j) {
+  store.update(s => { const c = s.subjects.find(x => x.id === subId).books.find(x => x.fileId === fileId).chapters.find(x => x.id === chId); if (c && j && (j.pruefung || j.anspruchsgrundlagen)) c.skript = j; });
 }

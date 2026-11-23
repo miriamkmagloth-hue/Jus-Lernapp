@@ -17,6 +17,7 @@ const routes = [
   [/^#\/fach\/neu$/, main.subjectEditor, 'faecher'],
   [/^#\/fach\/([^/]+)\/bearbeiten$/, main.subjectEditor, 'faecher'],
   [/^#\/fach\/([^/]+)\/kapitel\/([^/]+)(?:\/([^/]+))?$/, subj.chapterView, 'faecher'],
+  [/^#\/fach\/([^/]+)\/skript\/([^/]+)$/, subj.skriptView, 'faecher'],
   [/^#\/fach\/([^/]+)\/einheit\/([^/]+)(?:\/([^/]+))?$/, subj.unitView, 'faecher'],
   [/^#\/fach\/([^/]+)\/urteil\/([^/]+)(?:\/([^/]+))?$/, subj.rulingView, 'faecher'],
   [/^#\/fach\/([^/]+)\/altklausur\/([^/]+)$/, subj.altklausurView, 'faecher'],
