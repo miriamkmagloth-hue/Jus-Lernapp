@@ -129,7 +129,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary-sof
 .prose code { background: var(--grey-soft); padding: 1px 4px; border-radius: 4px; }
 .prose blockquote { border-left: 3px solid var(--hl); margin: 8px 0; padding: 4px 12px; color: var(--muted); }
 .cite { color: var(--hl); font-size: .82em; font-weight: 600; white-space: nowrap; }
-a.norm { text-decoration: none; border-bottom: 1px dotted var(--primary); }
+a.norm, a.norm-ext { text-decoration: none; border-bottom: 1px dotted var(--primary); }
 
 .chat { display: flex; flex-direction: column; gap: 10px; }
 .msg { padding: 10px 13px; border-radius: 14px; max-width: 92%; }

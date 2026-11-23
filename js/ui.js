@@ -15,7 +15,9 @@ export function esc(s) {
 const KNOWN_LAWS = new Set('ABGB B-VG StGB ZPO UGB KSchG StPO AVG EO IO MRG GmbHG AktG EheG JN ASVG VStG EKHG AußStrG WEG ECG FAGG VKrG PHG VGG DHG AHG OrgHG IPRG VersVG GBG UrhG ZaDiG HIKrG KartG UWG MSchG PatG FBG URG RAO NO GOG StVO KFG AtomHG RHPflG LuftFG EisbG ABGBEinf EGZPO AngG ArbVG AZG UrlG MuSchG GlBG VbVG BTVG TNG'.split(' '));
 const QUAL = String.raw`(?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*`;
 const NORM_RE = new RegExp(String.raw`(§§?)\s*(\d+[a-z]?${QUAL}(?:\s*(?:,|und|bis|–|-)\s*\d+[a-z]?${QUAL})*)(?:\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöü]{0,9}(?:-[A-Za-zÄÖÜäöü]{1,8})?)\b)?`, 'g');
-const ART_RE = new RegExp(String.raw`\b(Art\.?|Artikel)\s*(\d+[a-z]?${QUAL}(?:\s*(?:,|und|bis|–|-)\s*\d+[a-z]?${QUAL})*)\s+(UN-Kaufrecht|UNK|CISG|EMRK|StGG|B-VG|[A-ZÄÖÜ][A-Za-zÄÖÜäöü]{1,9}(?:-[A-Za-zÄÖÜäöü]{1,8})?)\b`, 'g');
+// EU-Recht steht nicht im RIS → Link zu EUR-Lex (Artikel direkt angesprungen)
+const EU_CELEX = { GRC: '12016P/TXT', AEUV: '12016E/TXT', EUV: '12016M/TXT', 'Rom I': '32008R0593', 'Rom I-VO': '32008R0593', 'Rom II': '32007R0864', 'Rom II-VO': '32007R0864', 'EuGVVO': '32012R1215', 'Brüssel Ia-VO': '32012R1215', DSGVO: '32016R0679' };
+const ART_RE = new RegExp(String.raw`\b(Art\.?|Artikel)\s*(\d+[a-z]?${QUAL}(?:\s*(?:,|und|bis|–|-)\s*\d+[a-z]?${QUAL})*)\s+(Rom II-VO|Rom I-VO|Rom II|Rom I|Brüssel Ia-VO|UN-Kaufrecht|UN-KaufR|UNK|CISG|EMRK|StGG|B-VG|[A-ZÄÖÜ][A-Za-zÄÖÜäöü]{1,9}(?:-[A-Za-zÄÖÜäöü]{1,8})?)\b`, 'g');
 function isLaw(t) { return t && (KNOWN_LAWS.has(t) || /^[A-ZÄÖÜ][A-Za-zÄÖÜäöü-]*(G|O|B|VO)$/.test(t) && /[A-ZÄÖÜ].*[A-ZÄÖÜ]/.test(t)); }
 export function enrich(htmlEscaped, defaultLaw = 'ABGB') {
   return htmlEscaped
@@ -29,7 +31,10 @@ export function enrich(htmlEscaped, defaultLaw = 'ABGB') {
       return `${sign} ${linked}${lawPart}${tail}`;
     })
     .replace(ART_RE, (m, sign, body, law) => {
-      if (!(isLaw(law) || /^(UN-Kaufrecht|UNK|CISG|EMRK|StGG)$/.test(law))) return m;
+      const eu = EU_CELEX[law];
+      if (!eu && !(isLaw(law) || /^(UN-Kaufrecht|UN-KaufR|UNK|CISG|EMRK|StGG)$/.test(law))) return m;
+      if (eu) return `${sign} ` + body.replace(/(^|,\s*|\s+und\s+|\s*bis\s*|\s*[–-]\s*)(\d+)([a-z]?(?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?))*)/g,
+        (x, pre, num, q) => `${pre}<a class="norm-ext" href="https://eur-lex.europa.eu/legal-content/DE/TXT/HTML/?uri=CELEX:${eu}#art_${num}" target="_blank" rel="noopener">${num}${q} ↗</a>`) + ` ${law}`;
       const linked = body.replace(/(^|,\s*|\s+und\s+|\s*bis\s*|\s*[–-]\s*)(\d+[a-z]?)((?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*)/g,
         (x, pre, para, q) => `${pre}<a class="norm" href="${normLink(para, law, 'art')}" data-para="${para}" data-law="${law}" data-kind="art" target="_blank" rel="noopener">${para}${q}</a>`);
       return `${sign} ${linked} ${law}`;

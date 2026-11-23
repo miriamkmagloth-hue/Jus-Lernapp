@@ -166,7 +166,7 @@ export function extractCitations(text) {
 }
 
 // Link zum Gesetzestext im RIS
-const GESETZESNR = { 'UN-Kaufrecht': '10002854', UNK: '10002854', CISG: '10002854', EMRK: '10000308', StGG: '10000006', ABGB: '10001622', 'B-VG': '10000138', StGB: '10002296', ZPO: '10001699', UGB: '10001702', KSchG: '10002462', StPO: '10002326', AVG: '10005768', EO: '10001700', IO: '10001736', MRG: '10002531', GmbHG: '10001720', AktG: '10002070', EheG: '10001871', JN: '10001697', ASVG: '10008147', VStG: '10005770', AußStrG: '20003047', WEG: '20001921', ECG: '20001703', FAGG: '20008847', VKrG: '20007120', PHG: '10002864', ABGBEinf: '' };
+const GESETZESNR = { 'UN-Kaufrecht': '10002854', 'UN-KaufR': '10002854', UNK: '10002854', CISG: '10002854', EMRK: '10000308', StGG: '10000006', ABGB: '10001622', 'B-VG': '10000138', StGB: '10002296', ZPO: '10001699', UGB: '10001702', KSchG: '10002462', StPO: '10002326', AVG: '10005768', EO: '10001700', IO: '10001736', MRG: '10002531', GmbHG: '10001720', AktG: '10002070', EheG: '10001871', JN: '10001697', ASVG: '10008147', VStG: '10005770', AußStrG: '20003047', WEG: '20001921', ECG: '20001703', FAGG: '20008847', VKrG: '20007120', PHG: '10002864', ABGBEinf: '' };
 export function normLink(paragraph, law, kind = 'para') {
   const nr = GESETZESNR[law];
   if (nr) return `https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&${kind === 'art' ? 'Artikel' : 'Paragraf'}=${encodeURIComponent(paragraph)}`;
