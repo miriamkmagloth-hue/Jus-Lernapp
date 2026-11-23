@@ -15,6 +15,7 @@ export function esc(s) {
 const KNOWN_LAWS = new Set('ABGB B-VG StGB ZPO UGB KSchG StPO AVG EO IO MRG GmbHG AktG EheG JN ASVG VStG EKHG AußStrG WEG ECG FAGG VKrG PHG VGG DHG AHG OrgHG IPRG VersVG GBG UrhG ZaDiG HIKrG KartG UWG MSchG PatG FBG URG RAO NO GOG StVO KFG AtomHG RHPflG LuftFG EisbG ABGBEinf EGZPO AngG ArbVG AZG UrlG MuSchG GlBG VbVG BTVG TNG'.split(' '));
 const QUAL = String.raw`(?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*`;
 const NORM_RE = new RegExp(String.raw`(§§?)\s*(\d+[a-z]?${QUAL}(?:\s*(?:,|und|bis|–|-)\s*\d+[a-z]?${QUAL})*)(?:\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöü]{0,9}(?:-[A-Za-zÄÖÜäöü]{1,8})?)\b)?`, 'g');
+const ART_RE = new RegExp(String.raw`\b(Art\.?|Artikel)\s*(\d+[a-z]?${QUAL}(?:\s*(?:,|und|bis|–|-)\s*\d+[a-z]?${QUAL})*)\s+(UN-Kaufrecht|UNK|CISG|EMRK|StGG|B-VG|[A-ZÄÖÜ][A-Za-zÄÖÜäöü]{1,9}(?:-[A-Za-zÄÖÜäöü]{1,8})?)\b`, 'g');
 function isLaw(t) { return t && (KNOWN_LAWS.has(t) || /^[A-ZÄÖÜ][A-Za-zÄÖÜäöü-]*(G|O|B|VO)$/.test(t) && /[A-ZÄÖÜ].*[A-ZÄÖÜ]/.test(t)); }
 export function enrich(htmlEscaped, defaultLaw = 'ABGB') {
   return htmlEscaped
@@ -26,6 +27,12 @@ export function enrich(htmlEscaped, defaultLaw = 'ABGB') {
       const linked = body.replace(/(^|,\s*|\s+und\s+|\s*bis\s*|\s*[–-]\s*)(\d+[a-z]?)((?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*)/g,
         (x, pre, para, q) => `${pre}<a class="norm" href="${normLink(para, law)}" data-para="${para}" data-law="${law}" target="_blank" rel="noopener">${para}${q}</a>`);
       return `${sign} ${linked}${lawPart}${tail}`;
+    })
+    .replace(ART_RE, (m, sign, body, law) => {
+      if (!(isLaw(law) || /^(UN-Kaufrecht|UNK|CISG|EMRK|StGG)$/.test(law))) return m;
+      const linked = body.replace(/(^|,\s*|\s+und\s+|\s*bis\s*|\s*[–-]\s*)(\d+[a-z]?)((?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*)/g,
+        (x, pre, para, q) => `${pre}<a class="norm" href="${normLink(para, law, 'art')}" data-para="${para}" data-law="${law}" data-kind="art" target="_blank" rel="noopener">${para}${q}</a>`);
+      return `${sign} ${linked} ${law}`;
     })
     .replace(/\[(S\.?\s*[\w\d\-–, f.]+)\]/g, '<span class="cite">[$1]</span>');
 }

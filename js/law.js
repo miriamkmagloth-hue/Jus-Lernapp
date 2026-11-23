@@ -41,15 +41,15 @@ async function fromOwnBook(subId, para, law) {
   return null;
 }
 
-export async function openLaw({ para, law, context = '', subId, href }) {
+export async function openLaw({ para, law, kind = 'para', context = '', subId, href }) {
   const kws = keywords(context);
-  const card = openModal(`<div class="row between"><h3 style="margin:0">§ ${esc(para)} ${esc(law)}</h3><button class="btn ghost" data-x>✕</button></div><div id="lawBody">${busy('Lade Gesetzestext …')}</div>
+  const card = openModal(`<div class="row between"><h3 style="margin:0">${kind === 'art' ? 'Art' : '§'} ${esc(para)} ${esc(law)}</h3><button class="btn ghost" data-x>✕</button></div><div id="lawBody">${busy('Lade Gesetzestext …')}</div>
     <div class="row" style="margin-top:12px"><a class="btn secondary small" href="${esc(href)}" target="_blank" rel="noopener">Im RIS öffnen ↗</a></div>`);
   card.querySelector('[data-x]').onclick = closeModal;
   const body = card.querySelector('#lawBody');
   let res = null, err = null;
-  try { res = { text: await fetchNormText(law, para), source: 'RIS – geltende Fassung' }; } catch (e) { err = e; }
-  if (!res) { try { res = await fromOwnBook(subId, para, law); } catch {} }
+  try { res = { text: await fetchNormText(law, para, kind), source: 'RIS – geltende Fassung' }; } catch (e) { err = e; }
+  if (!res && kind !== 'art') { try { res = await fromOwnBook(subId, para, law); } catch {} }
   if (!res) { body.innerHTML = `<div class="notice warn small">Der Text konnte nicht geladen werden${err ? ' (' + esc(err.message) + ')' : ''}. Öffne ihn direkt im RIS.</div>`; return; }
   body.innerHTML = `<div class="tiny muted" style="margin:6px 0">Quelle: ${esc(res.source)}${kws.length ? ' · markiert: Stichwörter aus dem Zusammenhang' : ''}</div>
     <div class="sachverhalt" style="font-size:.95rem;max-height:60vh;overflow:auto">${highlight(res.text, kws)}</div>`;

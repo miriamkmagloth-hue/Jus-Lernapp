@@ -72,7 +72,7 @@ document.addEventListener('click', e => {
   e.preventDefault();
   const ctx = (a.closest('li, p, details, .card') || a.parentElement)?.textContent || '';
   const m = (location.hash || '').match(/^#\/fach\/([^/]+)/);
-  openLaw({ para: a.dataset.para, law: a.dataset.law, context: ctx, subId: m?.[1], href: a.href });
+  openLaw({ para: a.dataset.para, law: a.dataset.law, kind: a.dataset.kind || 'para', context: ctx, subId: m?.[1], href: a.href });
 });
 $('#backBtn').onclick = () => history.length > 1 ? history.back() : (location.hash = '#/');
 

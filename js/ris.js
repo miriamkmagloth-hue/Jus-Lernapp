@@ -166,10 +166,10 @@ export function extractCitations(text) {
 }
 
 // Link zum Gesetzestext im RIS
-const GESETZESNR = { ABGB: '10001622', 'B-VG': '10000138', StGB: '10002296', ZPO: '10001699', UGB: '10001702', KSchG: '10002462', StPO: '10002326', AVG: '10005768', EO: '10001700', IO: '10001736', MRG: '10002531', GmbHG: '10001720', AktG: '10002070', EheG: '10001871', JN: '10001697', ASVG: '10008147', VStG: '10005770', AußStrG: '20003047', WEG: '20001921', ECG: '20001703', FAGG: '20008847', VKrG: '20007120', PHG: '10002864', ABGBEinf: '' };
-export function normLink(paragraph, law) {
+const GESETZESNR = { 'UN-Kaufrecht': '10002854', UNK: '10002854', CISG: '10002854', EMRK: '10000308', StGG: '10000006', ABGB: '10001622', 'B-VG': '10000138', StGB: '10002296', ZPO: '10001699', UGB: '10001702', KSchG: '10002462', StPO: '10002326', AVG: '10005768', EO: '10001700', IO: '10001736', MRG: '10002531', GmbHG: '10001720', AktG: '10002070', EheG: '10001871', JN: '10001697', ASVG: '10008147', VStG: '10005770', AußStrG: '20003047', WEG: '20001921', ECG: '20001703', FAGG: '20008847', VKrG: '20007120', PHG: '10002864', ABGBEinf: '' };
+export function normLink(paragraph, law, kind = 'para') {
   const nr = GESETZESNR[law];
-  if (nr) return `https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(paragraph)}`;
+  if (nr) return `https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&${kind === 'art' ? 'Artikel' : 'Paragraf'}=${encodeURIComponent(paragraph)}`;
   return `https://www.google.com/search?q=${encodeURIComponent('RIS § ' + paragraph + ' ' + law)}`;
 }
 
@@ -203,16 +203,16 @@ function normTextFromHtml(html) {
     .replace(/^(\d+[a-z]?\.|[a-z]\))(?=[A-Za-zÄÖÜäöü])/gm, '$1 ');
 }
 
-export async function fetchNormText(law, para) {
+export async function fetchNormText(law, para, kind = 'para') {
   const nr = await gesetzesNr(law);
   let text = '';
-  try { text = normTextFromHtml(await risFetch('doc', `NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(para)}`, true)); } catch {}
+  try { text = normTextFromHtml(await risFetch('doc', `NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&${kind === 'art' ? 'Artikel' : 'Paragraf'}=${encodeURIComponent(para)}`, true)); } catch {}
   if (text.length < 10) {
     // Ausweg über die Such-Schnittstelle (z. B. Gesetze, deren Paragraphen in einem „Artikel“ stehen)
     const num = String(para).match(/\d+/)?.[0];
-    const r = await risFetch('api', `Bundesrecht?Applikation=BrKons&Gesetzesnummer=${nr}&Abschnitt.Von=${num}&Abschnitt.Bis=${num}&Abschnitt.Typ=Paragraph&Fassung.FassungVom=${new Date().toISOString().slice(0, 10)}`);
+    const r = await risFetch('api', `Bundesrecht?Applikation=BrKons&Gesetzesnummer=${nr}&Abschnitt.Von=${num}&Abschnitt.Bis=${num}&Abschnitt.Typ=${kind === 'art' ? 'Artikel' : 'Paragraph'}&Fassung.FassungVom=${new Date().toISOString().slice(0, 10)}`);
     const docs = [].concat(r?.OgdSearchResult?.OgdDocumentResults?.OgdDocumentReference || []);
-    const id = docs.map(d => d?.Data?.Metadaten).find(m => new RegExp('§\\s*' + para + '\\b').test(m?.Bundesrecht?.BrKons?.ArtikelParagraphAnlage || ''))?.Technisch?.ID || docs[0]?.Data?.Metadaten?.Technisch?.ID;
+    const id = docs.map(d => d?.Data?.Metadaten).find(m => new RegExp((kind === 'art' ? 'Art\\.?\\s*' : '§\\s*') + para + '\\b').test(m?.Bundesrecht?.BrKons?.ArtikelParagraphAnlage || ''))?.Technisch?.ID || docs[0]?.Data?.Metadaten?.Technisch?.ID;
     if (id) text = normTextFromHtml(await risFetch('doc', `Dokument.wxe?Abfrage=Bundesnormen&Dokumentnummer=${id}`, true));
   }
   if (text.length < 10) throw new Error('Text nicht gefunden');
