@@ -4,7 +4,7 @@ import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, amp
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
 import { computePlan, activeExams, subjectMastery, PRIO_LABEL, paceText } from './planner.js';
 import { runJob, activeJobs, jobs } from './jobs.js';
-import { levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, buildVisuals, visualsEstimate, buildSkript, skriptEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
+import { recordLevelResult, levelText, processBook, analyzeUnit, analyzeAltklausur, altklausurOverview, summarizeChapter, chapterText, checkNewRulings, subjectContext, buildPools, poolEstimate, buildVisuals, visualsEstimate, buildSkript, skriptEstimate, addCitedRuling, prepareRulings, chaptersByNorm, migrateRulings, loadRulingTexts, summarizeRuling, mapScope, markStudied, getFileText, CATEGORIES } from './processing.js';
 import { mountChat } from './chat.js';
 import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
@@ -103,7 +103,7 @@ function tabPlan(el, sub) {
       ${e.assessment ? '' : `<div class="notice small">Tipp: Mach zuerst den <strong>Einstufungstest</strong>. Dann weiß die App, was du schon kannst, und plant realistisch.</div>`}
       ${plan.todayOff ? `<div class="notice ok small">${plan.todayOff.icon} Heute ist lernfrei (${esc(plan.todayOff.label)}).</div>` : ''}
       ${plan.today.length ? `<h4>Heute sinnvoll</h4><ul class="list">${plan.today.map(t => `<li><a class="item" href="#/fach/${sub.id}/kapitel/${t.id}"><span class="dot ${ampel(t.mastery, t.assessed)}"></span><div><div>${esc(t.title)}</div><div class="small muted">${esc(t.action)} · ca. ${fmtMin(t.min)}</div></div><span class="chev">›</span></a></li>`).join('')}</ul>` : ''}
-      <div class="row" style="margin-top:10px"><a class="btn small" href="#/fach/${sub.id}/pruefung/${e.id}">Lernplan & Stoff</a><a class="btn secondary small" href="#/fach/${sub.id}/einstufung/${e.id}">${e.assessment ? 'Einstufung wiederholen' : 'Einstufungstest'}</a>
+      <div class="row" style="margin-top:10px"><a class="btn small" href="#/fach/${sub.id}/pruefung/${e.id}">Lernplan & Stoff</a><a class="btn secondary small" href="#/fach/${sub.id}/einstufung/${e.id}">${e.assessment ? 'Einstufung wiederholen' : 'Einstufungstest (optional)'}</a>
       ${e.type === 'muendlich' ? `<a class="btn secondary small" href="#/fach/${sub.id}/simulation/${e.id}">Prüfung simulieren</a>` : `<a class="btn secondary small" href="#/fach/${sub.id}/fall">Fall üben</a>`}</div>` : ''}
     </div>`;
   }
@@ -744,7 +744,7 @@ export function examView(el, subId, examId) {
 
   ${groups.map(([g, l]) => { const items = plan.chapters.filter(c => c.plan === g); return items.length ? `<div class="card"><h3>${l} <span class="muted small">(${items.length})</span></h3><ul class="list">${items.map(c => `<li><div class="row"><span class="dot ${ampel(c.mastery, c.assessed)}"></span><a href="#/fach/${subId}/kapitel/${c.id}" style="flex:1;text-decoration:none;color:inherit"><div>${esc(c.title)}</div><div class="tiny muted">${c.levels ? `Basis ${Math.round((c.levels.basis || 0) * 100)}/${Math.round(c.target.basis * 100)} % · Vertiefung ${Math.round((c.levels.vertiefung || 0) * 100)}/${Math.round(c.target.vert * 100)} % · ` : c.assessed ? Math.round(c.mastery * 100) + ' % · ' : 'nicht eingestuft · '}noch ca. ${fmtMin(c.remaining)}${c.reasons.length ? ' · ' + c.reasons.map(esc).join(' · ') : ''}</div></a>
     <select data-prio="${c.id}" style="width:auto;min-height:32px;padding:4px 8px;font-size:.8rem">${['muss', 'wichtig', 'optional', 'raus'].map(p => `<option value="${p}" ${c.scope === p ? 'selected' : ''}>${PRIO_LABEL[p]}</option>`).join('')}</select></div></li>`).join('')}</ul></div>` : ''; }).join('')}
-  <div class="row"><a class="btn" href="#/fach/${subId}/einstufung/${examId}">Einstufungstest</a><a class="btn secondary" href="#/fach/${subId}/bearbeiten">Termin & Lernzeit ändern</a></div>`;
+  <div class="row"><a class="btn secondary" href="#/fach/${subId}/einstufung/${examId}">Einstufungstest (optional)</a><a class="btn secondary" href="#/fach/${subId}/bearbeiten">Termin & Lernzeit ändern</a></div>`;
 
   el.onchange = e => {
     const bk = e.target.closest('[data-book]');
@@ -910,6 +910,8 @@ function tabBegriffe(el, sub) {
         p.seen = (p.seen || 0) + 1;
         s.progress.terms[cur.key] = p;
       });
+      // zählt (vorsichtig) für den Kenntnisstand des Kapitels
+      if (cur.chId) recordLevelResult(cur.chId, { [cur.ebene === 'vertiefung' ? 'vertiefung' : 'basis']: [grade === 2 ? 1 : grade === 1 ? 0.5 : 0, 1] }, 'begriffe');
       queue.shift();
       if (grade === 0) queue.splice(Math.min(queue.length, 4), 0, cur); // gleich nochmal, nach ein paar anderen
       shown = false; drawCard();

@@ -150,7 +150,7 @@ export function todaySuggestions(sorted, exam) {
   let used = 0;
   for (const c of cand) {
     let action, min;
-    if (!c.assessed) { action = 'Einstufen: kurzer Test, ob du das schon kannst'; min = 10; }
+    if (!c.assessed) { action = 'Lernen: Zusammenfassung lesen, dann Multiple Choice (kostenlos) – das Ergebnis stuft dich automatisch ein'; min = Math.min(Math.max(c.remaining || 30, 20), 60); }
     else if (c.levels && c.levels.basis != null && c.levels.basis < 0.7) { action = 'Basis festigen: Zusammenfassung, Schemata, dann Basis-Test'; min = Math.min(c.remaining, 90); }
     else if (c.levels && c.levels.basis >= 0.75 && (c.levels.vertiefung == null || c.levels.vertiefung < 0.6) && c.mastery < 0.8) { action = 'Basis sitzt – jetzt Vertiefung üben (Spezialfragen)'; min = Math.min(c.remaining, 45); }
     else if (c.mastery < 0.45) { action = 'Zusammenfassung durcharbeiten, dann Test'; min = Math.min(c.remaining, 90); }
