@@ -169,19 +169,34 @@ export function normLink(paragraph, law) {
   return `https://www.google.com/search?q=${encodeURIComponent('RIS § ' + paragraph + ' ' + law)}`;
 }
 
-// Gesetzestext eines Paragraphen aus dem RIS holen (geltende Fassung)
+// Gesetzesnummer für Abkürzungen, die nicht fest hinterlegt sind (z. B. VGG, DHG), im RIS nachschlagen
+export async function gesetzesNr(law) {
+  if (GESETZESNR[law]) return GESETZESNR[law];
+  const key = 'risNr:' + law;
+  try { const c = localStorage.getItem(key); if (c) return c; } catch {}
+  const r = await risFetch('api', `v2.6/Bundesrecht?Applikation=BrKons&Titel=${encodeURIComponent(law)}&DokumenteProSeite=Twenty`);
+  const docs = [].concat(r?.OgdSearchResult?.OgdDocumentResults?.OgdDocumentReference || []);
+  const hit = docs.map(d => d?.Data?.Metadaten?.Bundesrecht).find(m => String(m?.BrKons?.Abkuerzung || '').toLowerCase().replace(/\s/g, '') === law.toLowerCase());
+  const nr = hit?.BrKons?.Gesetzesnummer;
+  if (!nr) throw new Error('Gesetz „' + law + '“ im RIS nicht gefunden');
+  try { localStorage.setItem(key, nr); } catch {}
+  return nr;
+}
+
+// Gesetzestext eines Paragraphen aus dem RIS holen (geltende Fassung) – nur der Normtext, ohne Kopfdaten
 export async function fetchNormText(law, para) {
-  const nr = GESETZESNR[law];
-  if (!nr) throw new Error('Für ' + law + ' ist keine RIS-Nummer hinterlegt.');
+  const nr = await gesetzesNr(law);
   const html = await risFetch('doc', `NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(para)}`, true);
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  doc.querySelectorAll('script,style,nav,header,footer,noscript').forEach(n => n.remove());
-  const main = doc.querySelector('.document, .documentContent, #content, main') || doc.body;
-  let text = (main?.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
-  const start = text.search(new RegExp('§\\s*' + para.replace(/[a-z]$/, m => m) + '\\b'));
-  if (start > 0) text = text.slice(start);
-  const stop = text.search(/\n\s*(Schlagworte|Zuletzt aktualisiert am|Dokumentnummer|Im RIS seit|Gesetzesnummer)\b/);
-  if (stop > 50) text = text.slice(0, stop);
-  if (text.length < 20) throw new Error('Text nicht gefunden');
-  return text.slice(0, 12000);
+  doc.querySelectorAll('script,style,.sr-only,[class*="onlyScreenreader"]').forEach(n => n.remove());
+  const h = [...doc.querySelectorAll('h3')].find(x => x.textContent.trim() === 'Text');
+  const box = h?.parentElement;
+  if (!box) throw new Error('Text nicht gefunden');
+  h.remove();
+  box.querySelectorAll('h4,h5,li,p,div.Abs,div.Abs_small_indent,div[class*="Abs"],div[class*="Z"],div[class*="Lit"],br,tr').forEach(n => n.appendChild(doc.createTextNode('\n')));
+  box.querySelectorAll('h4').forEach(n => n.prepend(doc.createTextNode('\n')));
+  const text = box.textContent.replace(/ /g, ' ').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
+    .replace(/^(§\s*\d+[a-z]?\.)\n/m, '$1 ');
+  if (text.length < 10) throw new Error('Text nicht gefunden');
+  return text.slice(0, 15000);
 }

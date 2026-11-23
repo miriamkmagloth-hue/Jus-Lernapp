@@ -10,10 +10,23 @@ export function esc(s) {
 }
 
 // Paragraphen als Links, Seitenangaben hervorheben
-export function enrich(htmlEscaped) {
+// Erkennt z. B. „§ 1311“, „§ 1295 Abs 1 ABGB“, „§§ 918 f“, „§§ 922, 924 ABGB“, „§ 6 Abs 1 Z 5 KSchG“.
+// Ohne Gesetzesangabe gilt das ABGB (Zivilrecht).
+const KNOWN_LAWS = new Set('ABGB B-VG StGB ZPO UGB KSchG StPO AVG EO IO MRG GmbHG AktG EheG JN ASVG VStG EKHG AußStrG WEG ECG FAGG VKrG PHG VGG DHG AHG OrgHG IPRG VersVG GBG UrhG ZaDiG HIKrG KartG UWG MSchG PatG FBG URG RAO NO GOG StVO KFG AtomHG RHPflG LuftFG EisbG ABGBEinf EGZPO AngG ArbVG AZG UrlG MuSchG GlBG VbVG BTVG TNG'.split(' '));
+const QUAL = String.raw`(?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*`;
+const NORM_RE = new RegExp(String.raw`(§§?)\s*(\d+[a-z]?${QUAL}(?:\s*(?:,|und|bis|–|-)\s*\d+[a-z]?${QUAL})*)(?:\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöü]{0,9}(?:-[A-Za-zÄÖÜäöü]{1,8})?)\b)?`, 'g');
+function isLaw(t) { return t && (KNOWN_LAWS.has(t) || /^[A-ZÄÖÜ][A-Za-zÄÖÜäöü-]*(G|O|B|VO)$/.test(t) && /[A-ZÄÖÜ].*[A-ZÄÖÜ]/.test(t)); }
+export function enrich(htmlEscaped, defaultLaw = 'ABGB') {
   return htmlEscaped
-    .replace(/(§§?\s*(\d+[a-z]?)(?:\s*(?:Abs\.?\s*\d+|Z\s*\d+|lit\.?\s*[a-z]|Satz\s*\d+|S\s*\d+|ff?\.?))*\s+(ABGB|B-VG|StGB|ZPO|UGB|KSchG|StPO|AVG|EO|IO|MRG|GmbHG|AktG|EheG|JN|ASVG|VStG|EKHG|AußStrG|WEG|ECG|FAGG|VKrG|PHG))/g,
-      (m, all, para, law) => `<a class="norm" href="${normLink(para, law)}" data-para="${para}" data-law="${law}" target="_blank" rel="noopener">${all}</a>`)
+    .replace(NORM_RE, (m, sign, body, tok) => {
+      const law = isLaw(tok) ? tok : defaultLaw;
+      const tail = isLaw(tok) ? '' : (tok ? ' ' + tok : '');
+      const lawPart = isLaw(tok) ? ' ' + tok : '';
+      // jede Paragraphennummer einzeln verlinken (nicht die Zahlen nach Abs, Z, S)
+      const linked = body.replace(/(^|,\s*|\s+und\s+|\s*bis\s*|\s*[–-]\s*)(\d+[a-z]?)((?:\s*(?:Abs\.?\s*\d+[a-z]?|Z\s*\d+[a-z]?|lit\.?\s*[a-z]|S(?:atz)?\s*\d+|ff?\.?|Fall\s*\d+))*)/g,
+        (x, pre, para, q) => `${pre}<a class="norm" href="${normLink(para, law)}" data-para="${para}" data-law="${law}" target="_blank" rel="noopener">${para}${q}</a>`);
+      return `${sign} ${linked}${lawPart}${tail}`;
+    })
     .replace(/\[(S\.?\s*[\w\d\-–, f.]+)\]/g, '<span class="cite">[$1]</span>');
 }
 
