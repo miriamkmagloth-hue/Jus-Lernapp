@@ -1,5 +1,5 @@
 // Paragraph antippen: Gesetzestext anzeigen (RIS oder eigenes Buch „Gesetzestext“), Stichwörter markieren
-import { store, bookRole, textGet } from './store.js';
+import { store, bookRole, textGet, findChapter } from './store.js';
 import { fetchNormText } from './ris.js';
 import { openModal, closeModal, esc, busy } from './ui.js';
 
@@ -53,4 +53,46 @@ export async function openLaw({ para, law, kind = 'para', context = '', subId, h
   if (!res) { body.innerHTML = `<div class="notice warn small">Der Text konnte nicht geladen werden${err ? ' (' + esc(err.message) + ')' : ''}. Öffne ihn direkt im RIS.</div>`; return; }
   body.innerHTML = `<div class="tiny muted" style="margin:6px 0">Quelle: ${esc(res.source)}${kws.length ? ' · markiert: Stichwörter aus dem Zusammenhang' : ''}</div>
     <div class="sachverhalt" style="font-size:.95rem;max-height:60vh;overflow:auto">${highlight(res.text, kws)}</div>`;
+}
+
+
+// Seitenangabe wie „S. 21–22“, „S. 290 f“, „S. 145, 147“ → Buchseiten zum Nachlesen
+export async function openPages({ subId, chId, fileId, ref }) {
+  const sub = store.subject(subId);
+  if (!sub) return;
+  const found = chId ? findChapter(sub, chId) : null;
+  const book = found?.book || sub.books.find(b => b.fileId === fileId);
+  const card = openModal(`<div class="row between"><h3 style="margin:0">${esc(ref.replace(/^\[|\]$/g, ''))}</h3><button class="btn ghost" data-x>✕</button></div><div class="tiny muted">${esc(book?.title || '')}</div><div id="pgBody">${busy('Lade die Buchseiten …')}</div>`);
+  card.querySelector('[data-x]').onclick = closeModal;
+  const body = card.querySelector('#pgBody');
+  if (!book) { body.innerHTML = '<div class="notice small">Zu dieser Stelle ist kein Buch bekannt.</div>'; return; }
+  try {
+    const { getFileText } = await import('./processing.js');
+    const t = await getFileText(sub, book.fileId);
+    const byLabel = new Map(t.pages.map(p => [String(p.label), p.n]));
+    // Zahlen aus der Angabe lesen
+    const txt = ref.replace(/^\[|\]$/g, '').replace(/^S\.?\s*/, '');
+    const wanted = new Set();
+    for (const part of txt.split(/[,;]/)) {
+      const r = part.match(/(\d+)\s*(?:[–-]\s*(\d+))?\s*(ff?)?/);
+      if (!r) continue;
+      const a = +r[1], b = r[2] ? +r[2] : r[3] === 'ff' ? a + 2 : r[3] === 'f' ? a + 1 : a;
+      for (let x = a; x <= Math.min(b, a + 6); x++) { const n = byLabel.get(String(x)); if (n) wanted.add(n); }
+    }
+    const nums = [...wanted].sort((a, b) => a - b);
+    if (!nums.length) throw new Error('Seite nicht gefunden');
+    body.innerHTML = `<div class="row" style="margin:8px 0"><button class="btn secondary small" data-orig>Originalseite${nums.length > 1 ? 'n' : ''} ansehen</button></div>
+      <div class="sachverhalt" style="font-size:.95rem;max-height:62vh;overflow:auto">${nums.map(n => { const p = t.pages[n - 1]; return `<div class="tiny muted" style="margin:10px 0 4px">— Seite ${esc(p.label)} —</div>${esc(p.text)}`; }).join('')}</div>`;
+    body.querySelector('[data-orig]').onclick = async () => {
+      const box = body.querySelector('.sachverhalt');
+      box.innerHTML = busy('Lade die Originalseiten aus dem Buch …');
+      try {
+        const { downloadFile } = await import('./drive.js'); const { renderPdfPages } = await import('./extract.js');
+        const f = sub.files[book.fileId];
+        const dl = await downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name });
+        const imgs = await renderPdfPages(dl.buffer, nums, { scale: 1.6, quality: 0.8 });
+        box.innerHTML = nums.map(n => `<img src="data:image/jpeg;base64,${imgs[n]}" style="width:100%;margin-bottom:8px;border-radius:6px">`).join('');
+      } catch (err) { box.innerHTML = `<div class="notice err small">${esc(err.message)}</div>`; }
+    };
+  } catch (err) { body.innerHTML = `<div class="notice err small">${esc(err.message)}</div>`; }
 }

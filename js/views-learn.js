@@ -91,7 +91,7 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
       addLevel(perChapter, cid, q, ok);
       if (!ok) addMistake({ subId: sub.id, chapterId: cid, chapterTitle: findChapter(sub, cid)?.chapter.title, question: q.frage, yourAnswer: q.opts[k].text, correct: q.opts.find(o => o.ok)?.text, explanation: q.erklaerung });
       el.querySelectorAll('.mc-option').forEach((b, j) => { b.disabled = true; if (q.opts[j].ok) b.classList.add('correct'); else if (j === k) b.classList.add('wrong'); });
-      el.querySelector('#fb').innerHTML = `<div class="notice ${ok ? 'ok' : 'err'}" style="margin-top:10px"><strong>${ok ? 'Richtig!' : 'Leider falsch.'}</strong> ${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}${md(q.erklaerung)}</div>
+      el.querySelector('#fb').innerHTML = `<div class="notice ${ok ? 'ok' : 'err'}" data-chid="${esc(cid || '')}" style="margin-top:10px"><strong>${ok ? 'Richtig!' : 'Leider falsch.'}</strong> ${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}${md(q.erklaerung)}</div>
         <button class="btn block" data-a="next">${i + 1 < qs.length ? 'Weiter' : 'Ergebnis'}</button>`;
       el.querySelector('[data-a=next]').onclick = () => { i++; i < qs.length ? show() : finish(); };
     };
@@ -651,7 +651,7 @@ export function assessmentView(el, subId, examId, onlyChapter) {
           score[q.kapitelId][l][1]++;
           if (ok) score[q.kapitelId][l][0] += guess ? 0.5 : 1;
           el.querySelectorAll('.mc-option').forEach((bb, j) => { bb.disabled = true; if (j < q.opts.length && q.opts[j].ok) bb.classList.add('correct'); else if (+bb.dataset.k === k) bb.classList.add('wrong'); });
-          el.querySelector('#fb').innerHTML = `<div class="small" style="margin:10px 0">${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span> ` : ''}${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
+          el.querySelector('#fb').innerHTML = `<div class="small" data-chid="${esc(q.kapitelId || '')}" style="margin:10px 0">${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span> ` : ''}${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
           el.querySelector('[data-a=n]').onclick = () => { i++; show(); };
         });
       };

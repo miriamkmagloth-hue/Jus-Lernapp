@@ -1,7 +1,7 @@
 // Einstieg: Start, Navigation, automatische Synchronisierung
 import { STRUCT_VER, markDuplicates } from './processing.js';
 import { store, local, bookRole, bookInExam, isStudyChapter } from './store.js';
-import { openLaw } from './law.js';
+import { openLaw, openPages } from './law.js';
 import { serverAuthInfo, signIn, signInSilently, syncOnStart, onSync, onNeedLogin, isSignedIn, canStaySignedIn } from './drive.js';
 import { $, $$, toast } from './ui.js';
 import { onJobs, runJob, jobs } from './jobs.js';
@@ -67,6 +67,16 @@ export function softRender() {
 
 window.addEventListener('hashchange', () => render());
 // Paragraphen antippen: Gesetzestext mit markierten Stichwörtern öffnen
+// Seitenangaben antippen → die Buchseiten lesen
+document.addEventListener('click', e => {
+  const c = e.target.closest('.cite');
+  if (!c) return;
+  const m = (location.hash || '').match(/^#\/fach\/([^/]+)(?:\/(kapitel|skript)\/([^/]+))?/);
+  if (!m) return;
+  const chId = c.closest('[data-chid]')?.dataset.chid || (m[2] === 'kapitel' ? m[3] : '');
+  openPages({ subId: m[1], chId, fileId: m[2] === 'skript' ? m[3] : '', ref: c.textContent });
+});
+
 document.addEventListener('click', e => {
   const a = e.target.closest('a.norm');
   if (!a || !a.dataset.para) return;

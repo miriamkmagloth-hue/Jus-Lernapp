@@ -228,3 +228,4 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
 @media (max-width: 699px) { .tabs { mask-image: linear-gradient(to right, #000 85%, transparent); -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); } }
 .term-card { min-height: 180px; display: flex; flex-direction: column; justify-content: center; text-align: center; }
 .term-card .term { font-size: 1.35rem; font-weight: 700; }
+.cite { cursor: pointer; } .cite:hover { text-decoration: underline; }

@@ -192,7 +192,7 @@ function tabSchemata(el, sub) {
       if (!chs.length) continue;
       html += `<h3 style="margin:18px 4px 8px">${esc(b.title)}</h3>`;
       for (const c of chs) {
-        html += `<div class="card"><div class="small muted">${esc(c.title)}</div>`;
+        html += `<div class="card" data-chid="${c.id}"><div class="small muted">${esc(c.title)}</div>`;
         for (const v of byCh.get(c.id) || []) {
           const sc = v.schema;
           html += `<div style="margin:10px 0 14px"><div class="row between"><div class="item-title">🧭 ${esc(sc.titel || v.title)}</div><button class="btn ghost small" data-orig="${b.fileId}|${v.page}">Originalgrafik (S. ${esc(v.label)})</button></div>
@@ -834,7 +834,7 @@ export function skriptView(el, subId, fileId) {
     for (const c of chs) {
       const k = c.skript;
       const vis = (b.visuals || []).filter(v => v.chapterId === c.id && v.schema);
-      html += `<div class="card skript-ch" id="sk-${c.id}"><h3 style="margin-top:0">${esc(c.title)} <span class="tiny muted">S. ${esc(c.startLabel || '')}–${esc(c.endLabel || '')}</span></h3>`;
+      html += `<div class="card skript-ch" id="sk-${c.id}" data-chid="${c.id}"><h3 style="margin-top:0">${esc(c.title)} <span class="tiny muted">S. ${esc(c.startLabel || '')}–${esc(c.endLabel || '')}</span></h3>`;
       if (!k) { html += `<div class="small muted">Noch nicht erstellt.${c.summary?.kurzfassung ? ' Kurzfassung: ' + enrich(esc(c.summary.kurzfassung)) : ''}</div></div>`; continue; }
       if (k.kernaussage) html += `<p class="small"><strong>Worum es im Fall geht:</strong> ${enrich(esc(k.kernaussage))}</p>`;
       if ((k.anspruchsgrundlagen || []).length) html += `<div class="small"><strong>Anspruchsgrundlagen</strong><ul>${k.anspruchsgrundlagen.map(a => `<li>${enrich(esc(a.norm || ''))} – ${enrich(esc(a.wofuer || ''))}${cite(a)}</li>`).join('')}</ul></div>`;
@@ -904,7 +904,7 @@ function tabBegriffe(el, sub) {
     cur = queue[0];
     let html = header(list);
     if (!cur) html += `<div class="card" style="text-align:center"><p>🎉 Für heute ist alles gelernt.</p><button class="btn secondary small" data-a="extra">Trotzdem weiter üben</button></div>`;
-    else html += `<div class="card term-card"><div class="tiny muted">${esc(cur.bookTitle)} · ${esc(cur.chapter)} ${cur.ebene === 'vertiefung' ? '· <span class="pill gold">Vertiefung</span>' : ''}</div>
+    else html += `<div class="card term-card" data-chid="${esc(cur.chId)}"><div class="tiny muted">${esc(cur.bookTitle)} · ${esc(cur.chapter)} ${cur.ebene === 'vertiefung' ? '· <span class="pill gold">Vertiefung</span>' : ''}</div>
       <div class="term" style="margin:14px 0">${esc(cur.begriff)}</div>
       ${shown ? `<div style="text-align:left">${enrich(esc(cur.definition))}${cur.seite && !/\[S\./.test(cur.definition) ? ` <span class="cite">[${esc(String(cur.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div>
         <div class="row" style="justify-content:center;margin-top:14px;gap:6px"><button class="btn secondary small" data-r="0">Nicht gewusst</button><button class="btn secondary small" data-r="1">Ungefähr</button><button class="btn small" data-r="2">Gewusst</button></div>`
@@ -919,7 +919,7 @@ function tabBegriffe(el, sub) {
     const q = st.q.toLowerCase();
     const shownList = q ? list.filter(t => (t.begriff + ' ' + t.definition).toLowerCase().includes(q)) : list;
     el.innerHTML = header(list) + `<input type="text" id="tq" placeholder="Begriff suchen …" value="${esc(st.q)}" style="margin-bottom:10px">
-      <div class="card"><ul class="list">${shownList.sort((a, b) => a.begriff.localeCompare(b.begriff, 'de')).slice(0, 400).map(t => `<li style="display:block;padding:8px 0"><strong>${esc(t.begriff)}</strong> <span class="tiny muted">${esc(t.chapter)}</span><div class="small">${enrich(esc(t.definition))}${t.seite && !/\[S\./.test(t.definition) ? ` <span class="cite">[${esc(String(t.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div></li>`).join('') || '<li class="muted small">Keine Treffer.</li>'}</ul></div>
+      <div class="card"><ul class="list">${shownList.sort((a, b) => a.begriff.localeCompare(b.begriff, 'de')).slice(0, 400).map(t => `<li data-chid="${esc(t.chId)}" style="display:block;padding:8px 0"><strong>${esc(t.begriff)}</strong> <span class="tiny muted">${esc(t.chapter)}</span><div class="small">${enrich(esc(t.definition))}${t.seite && !/\[S\./.test(t.definition) ? ` <span class="cite">[${esc(String(t.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div></li>`).join('') || '<li class="muted small">Keine Treffer.</li>'}</ul></div>
       ${Object.keys(hidden()).length ? `<div class="card small"><details><summary>Ausgeblendete Begriffe (${Object.keys(hidden()).length})</summary>${Object.keys(hidden()).map(k => `<button class="btn ghost small" data-unhide="${esc(k)}">↺ ${esc(k)}</button>`).join(' ')}</details></div>` : ''}`;
     bindHeader();
     const tq = el.querySelector('#tq'); tq.oninput = () => { st.q = tq.value; clearTimeout(el._t); el._t = setTimeout(() => { drawList(); const x = el.querySelector('#tq'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }, 300); };
