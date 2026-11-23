@@ -188,21 +188,33 @@ export async function gesetzesNr(law) {
 }
 
 // Gesetzestext eines Paragraphen aus dem RIS holen (geltende Fassung) – nur der Normtext, ohne Kopfdaten
-export async function fetchNormText(law, para) {
-  const nr = await gesetzesNr(law);
-  const html = await risFetch('doc', `NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(para)}`, true);
+function normTextFromHtml(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script,style,.sr-only,[class*="onlyScreenreader"]').forEach(n => n.remove());
   const h = [...doc.querySelectorAll('h3')].find(x => x.textContent.trim() === 'Text');
   const box = h?.parentElement;
-  if (!box) throw new Error('Text nicht gefunden');
+  if (!box) return '';
   h.remove();
   box.querySelectorAll('h4,h5,li,p,div.Abs,div.Abs_small_indent,div[class*="Abs"],div[class*="Z"],div[class*="Lit"],br,tr').forEach(n => n.appendChild(doc.createTextNode('\n')));
   box.querySelectorAll('h4').forEach(n => n.prepend(doc.createTextNode('\n')));
-  const text = box.textContent.replace(/ /g, ' ').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
+  return box.textContent.replace(/ /g, ' ').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
     .replace(/^(§\s*\d+[a-z]?\.)\n/m, '$1 ')
     .replace(/(\(\d+[a-z]?\))(?=[A-Za-zÄÖÜäöü])/g, '$1 ')
     .replace(/^(\d+[a-z]?\.|[a-z]\))(?=[A-Za-zÄÖÜäöü])/gm, '$1 ');
+}
+
+export async function fetchNormText(law, para) {
+  const nr = await gesetzesNr(law);
+  let text = '';
+  try { text = normTextFromHtml(await risFetch('doc', `NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=${nr}&Paragraf=${encodeURIComponent(para)}`, true)); } catch {}
+  if (text.length < 10) {
+    // Ausweg über die Such-Schnittstelle (z. B. Gesetze, deren Paragraphen in einem „Artikel“ stehen)
+    const num = String(para).match(/\d+/)?.[0];
+    const r = await risFetch('api', `Bundesrecht?Applikation=BrKons&Gesetzesnummer=${nr}&Abschnitt.Von=${num}&Abschnitt.Bis=${num}&Abschnitt.Typ=Paragraph&Fassung.FassungVom=${new Date().toISOString().slice(0, 10)}`);
+    const docs = [].concat(r?.OgdSearchResult?.OgdDocumentResults?.OgdDocumentReference || []);
+    const id = docs.map(d => d?.Data?.Metadaten).find(m => new RegExp('§\\s*' + para + '\\b').test(m?.Bundesrecht?.BrKons?.ArtikelParagraphAnlage || ''))?.Technisch?.ID || docs[0]?.Data?.Metadaten?.Technisch?.ID;
+    if (id) text = normTextFromHtml(await risFetch('doc', `Dokument.wxe?Abfrage=Bundesnormen&Dokumentnummer=${id}`, true));
+  }
   if (text.length < 10) throw new Error('Text nicht gefunden');
   return text.slice(0, 15000);
 }
