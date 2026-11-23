@@ -174,7 +174,7 @@ export async function gesetzesNr(law) {
   if (GESETZESNR[law]) return GESETZESNR[law];
   const key = 'risNr:' + law;
   try { const c = localStorage.getItem(key); if (c) return c; } catch {}
-  const r = await risFetch('api', `v2.6/Bundesrecht?Applikation=BrKons&Titel=${encodeURIComponent(law)}&DokumenteProSeite=Twenty`);
+  const r = await risFetch('api', `Bundesrecht?Applikation=BrKons&Titel=${encodeURIComponent(law)}&DokumenteProSeite=Twenty`);
   const docs = [].concat(r?.OgdSearchResult?.OgdDocumentResults?.OgdDocumentReference || []);
   const hit = docs.map(d => d?.Data?.Metadaten?.Bundesrecht).find(m => String(m?.BrKons?.Abkuerzung || '').toLowerCase().replace(/\s/g, '') === law.toLowerCase());
   const nr = hit?.BrKons?.Gesetzesnummer;
@@ -196,7 +196,9 @@ export async function fetchNormText(law, para) {
   box.querySelectorAll('h4,h5,li,p,div.Abs,div.Abs_small_indent,div[class*="Abs"],div[class*="Z"],div[class*="Lit"],br,tr').forEach(n => n.appendChild(doc.createTextNode('\n')));
   box.querySelectorAll('h4').forEach(n => n.prepend(doc.createTextNode('\n')));
   const text = box.textContent.replace(/ /g, ' ').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
-    .replace(/^(§\s*\d+[a-z]?\.)\n/m, '$1 ');
+    .replace(/^(§\s*\d+[a-z]?\.)\n/m, '$1 ')
+    .replace(/(\(\d+[a-z]?\))(?=[A-Za-zÄÖÜäöü])/g, '$1 ')
+    .replace(/^(\d+[a-z]?\.|[a-z]\))(?=[A-Za-zÄÖÜäöü])/gm, '$1 ');
   if (text.length < 10) throw new Error('Text nicht gefunden');
   return text.slice(0, 15000);
 }
