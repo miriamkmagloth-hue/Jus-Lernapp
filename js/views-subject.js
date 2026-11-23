@@ -244,7 +244,9 @@ function tabStoff(el, sub) {
   const exam = activeExams(sub)[0];
   const roleOrder = { stoff: 0, faelle: 1, nachschlag: 2, aus: 3 };
   const books = [...sub.books].sort((a, b) => roleOrder[bookRole(a)] - roleOrder[bookRole(b)]);
-  const navBooks = books.filter(b => bookRole(b) !== 'aus');
+  const romanV = t => { const m = String(t).match(/^Zivilrecht\s+([IVX]+)\b/); if (!m) return 99; const v = { I: 1, V: 5, X: 10 }; let n = 0; const r = m[1]; for (let i = 0; i < r.length; i++) { const a = v[r[i]], b2 = v[r[i + 1]] || 0; n += a < b2 ? -a : a; } return n; };
+  const navBooks = books.filter(b => bookRole(b) !== 'aus' && !(bookRole(b) === 'stoff' && !b.chapters.some(c => c.summary) && books.some(o => o !== b && o.title === b.title && o.chapters.some(c => c.summary))))
+    .sort((a, b) => roleOrder[bookRole(a)] - roleOrder[bookRole(b)] || romanV(a.title) - romanV(b.title));
   const shortT = t => { const m = String(t).match(/^Zivilrecht\s+([IVX]+)\b/); return m ? 'ZR ' + m[1] : String(t).replace(/\s+–.*$/, '').slice(0, 28); };
   el.innerHTML = `<div class="card" style="position:sticky;top:0;z-index:5;padding:10px 12px"><div class="row" style="gap:6px;flex-wrap:wrap">${navBooks.map(b => `<button class="tab" data-goto="${b.fileId}">${bookRole(b) === 'faelle' ? '📝' : bookRole(b) === 'stoff' ? '📘' : '📖'} ${esc(shortT(b.title))}</button>`).join('')}</div></div>
   <div class="notice small">Leg pro Buch fest, wofür es da ist: <strong>Lernstoff</strong> wird zusammengefasst und abgefragt, <strong>Fallsammlung</strong>: Fälle samt Buchlösung werden herausgelöst und den Lehrbuchkapiteln zugeordnet, <strong>Nachschlagewerk</strong> (z. B. Gesetzestext) wird nur eingelesen, damit du Paragraphen antippen kannst, <strong>Nicht verwenden</strong> wird ignoriert. Welche Bücher zu welcher Prüfung gehören, stellst du im Lernplan der Prüfung ein.</div>` + books.map(b => {
@@ -784,7 +786,7 @@ export function skriptView(el, subId, fileId) {
     const chs = b.chapters.filter(isStudyChapter);
     const missing = chs.filter(c => !c.skript).length;
     const running = sub.books.filter(x => x.batch?.kind === 'skript');
-    const books = sub.books.filter(x => bookRole(x) === 'stoff' && x.chapters?.length);
+    const books = sub.books.filter(x => bookRole(x) === 'stoff' && x.chapters?.some(c => c.summary));
     const allMissing = books.reduce((a, x) => a + x.chapters.filter(c => isStudyChapter(c) && !c.skript).length, 0);
     const cite = x => x?.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : '';
     const li = arr => (arr || []).map(x => `<li>${enrich(esc(x.text || x))}${cite(x)}</li>`).join('');
@@ -816,7 +818,7 @@ export function skriptView(el, subId, fileId) {
     if (e.target.closest('[data-a=make]')) {
       const btn = e.target.closest('button'); btn.disabled = true; btn.textContent = 'Berechne Kosten …';
       const sub = store.subject(subId);
-      const books = sub.books.filter(x => bookRole(x) === 'stoff' && x.chapters?.length && !x.batch && x.chapters.some(c => isStudyChapter(c) && !c.skript));
+      const books = sub.books.filter(x => bookRole(x) === 'stoff' && x.chapters?.some(c => c.summary) && !x.batch && x.chapters.some(c => isStudyChapter(c) && !c.skript));
       const pages = {};
       for (const x of books) pages[x.fileId] = (await getFileText(sub, x.fileId)).pages;
       const est = skriptEstimate(books, pages);
