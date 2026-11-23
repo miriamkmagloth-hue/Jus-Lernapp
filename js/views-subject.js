@@ -10,7 +10,7 @@ import { clip, cancelBatch } from './ai.js';
 import { mountQuiz, mountFreeQuestion, mountChapterCards } from './views-learn.js';
 import { isSignedIn } from './drive.js';
 
-const TABS = [['plan', 'Übersicht'], ['chat', 'Chat'], ['stoff', 'Lehrbuch'], ['schemata', 'Falllösungsschemata'], ['einheiten', 'Einheiten'], ['falltraining', 'Falltraining'], ['altklausuren', 'Altklausuren'], ['ogh', 'OGH-Urteile'], ['muendlich', 'Mündlich'], ['dateien', 'Dateien']];
+const TABS = [['plan', 'Übersicht'], ['chat', 'Chat'], ['stoff', 'Lehrbuch'], ['schemata', 'Falllösungsschemata'], ['begriffe', 'Begriffe'], ['einheiten', 'Einheiten'], ['falltraining', 'Falltraining'], ['altklausuren', 'Altklausuren'], ['ogh', 'OGH-Urteile'], ['muendlich', 'Mündlich'], ['dateien', 'Dateien']];
 
 export function renderJobBar(bar) {
   const subId = bar.dataset.jobs;
@@ -76,7 +76,7 @@ export function subjectView(el, subId, tab = 'plan') {
   el.innerHTML = header(sub, tab) + '<div id="tabBody"></div>';
   mountJobBar(el);
   const body = el.querySelector('#tabBody');
-  ({ plan: tabPlan, chat: tabChat, schemata: tabSchemata, stoff: tabStoff, einheiten: tabUnits, falltraining: tabCases, altklausuren: tabAlt, ogh: tabOgh, muendlich: tabOral, dateien: tabFiles }[tab] || tabPlan)(body, sub);
+  ({ plan: tabPlan, chat: tabChat, schemata: tabSchemata, begriffe: tabBegriffe, stoff: tabStoff, einheiten: tabUnits, falltraining: tabCases, altklausuren: tabAlt, ogh: tabOgh, muendlich: tabOral, dateien: tabFiles }[tab] || tabPlan)(body, sub);
 }
 
 // ---------- Übersicht ----------
@@ -826,6 +826,93 @@ export function skriptView(el, subId, fileId) {
       if (!ok) { draw(); return; }
       for (const x of books) runJob('skript:' + x.fileId, `Falllösungs-Skript „${x.title}“`, st => buildSkript(subId, x.fileId, st), { subId });
       setTimeout(draw, 2000);
+    }
+  };
+  draw();
+}
+
+
+// ---------- Fachbegriffe als Karteikarten (aus den Definitionen der Zusammenfassungen, kostenlos) ----------
+const termState = {};
+const termKey = t => String(t).toLowerCase().replace(/\s*\([^)]*\)\s*/g, ' ').replace(/[^a-zäöüß0-9]+/g, ' ').trim();
+function collectTerms(sub) {
+  const map = new Map();
+  for (const b of sub.books.filter(x => bookRole(x) === 'stoff')) for (const c of b.chapters.filter(isStudyChapter)) for (const d of c.summary?.definitionen || []) {
+    if (!d?.begriff || !d?.definition) continue;
+    const k = termKey(d.begriff);
+    if (!k || map.has(k)) continue;
+    map.set(k, { key: k, begriff: d.begriff, definition: d.definition, seite: d.seite || '', ebene: d.ebene || 'basis', book: b.fileId, bookTitle: b.title, chapter: c.title, chId: c.id });
+  }
+  return [...map.values()];
+}
+const BOX_DAYS = [0, 1, 3, 7, 16, 35];
+function tabBegriffe(el, sub) {
+  const st = termState[sub.id] ||= { book: '', ebene: '', mode: 'lernen', q: '' };
+  const prog = () => store.state.progress.terms || {};
+  const hidden = () => store.state.progress.termsHidden || {};
+  let queue = [], cur = null, shown = false;
+  const pool = () => collectTerms(store.subject(sub.id)).filter(t => !hidden()[t.key] && (!st.book || t.book === st.book) && (!st.ebene || t.ebene === st.ebene));
+  const due = list => { const now = Date.now(); return list.filter(t => !prog()[t.key] || (prog()[t.key].due || 0) <= now).sort((a, b) => (prog()[a.key]?.due || 0) - (prog()[b.key]?.due || 0)); };
+  const header = list => {
+    const books = store.subject(sub.id).books.filter(x => bookRole(x) === 'stoff' && x.chapters.some(c => c.summary?.definitionen?.length));
+    const learned = list.filter(t => (prog()[t.key]?.box || 0) >= 3).length;
+    return `<div class="card"><div class="row" style="gap:8px;flex-wrap:wrap">
+      <select id="tbook" style="flex:1;min-width:150px"><option value="">Alle Bücher</option>${books.map(b => `<option value="${b.fileId}" ${st.book === b.fileId ? 'selected' : ''}>${esc(b.title)}</option>`).join('')}</select>
+      <select id="tebene" style="width:auto"><option value="">Basis + Vertiefung</option><option value="basis" ${st.ebene === 'basis' ? 'selected' : ''}>nur Basis</option><option value="vertiefung" ${st.ebene === 'vertiefung' ? 'selected' : ''}>nur Vertiefung</option></select></div>
+      <div class="small muted" style="margin-top:8px">${list.length} Fachbegriffe · ${due(list).length} jetzt dran · ${learned} sicher gelernt${Object.keys(hidden()).length ? ` · ${Object.keys(hidden()).length} ausgeblendet` : ''}</div>
+      <div class="tabs" style="margin:8px 0 0"><button class="tab ${st.mode === 'lernen' ? 'active' : ''}" data-mode="lernen">Lernen</button><button class="tab ${st.mode === 'liste' ? 'active' : ''}" data-mode="liste">Liste / Nachschlagen</button></div></div>`;
+  };
+  const drawCard = () => {
+    const list = pool();
+    if (!queue.length) queue = due(list).slice(0, 20);
+    cur = queue[0];
+    let html = header(list);
+    if (!cur) html += `<div class="card" style="text-align:center"><p>🎉 Für heute ist alles gelernt.</p><button class="btn secondary small" data-a="extra">Trotzdem weiter üben</button></div>`;
+    else html += `<div class="card term-card"><div class="tiny muted">${esc(cur.bookTitle)} · ${esc(cur.chapter)} ${cur.ebene === 'vertiefung' ? '· <span class="pill gold">Vertiefung</span>' : ''}</div>
+      <div class="term" style="margin:14px 0">${esc(cur.begriff)}</div>
+      ${shown ? `<div style="text-align:left">${enrich(esc(cur.definition))}${cur.seite ? ` <span class="cite">[${esc(String(cur.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div>
+        <div class="row" style="justify-content:center;margin-top:14px;gap:6px"><button class="btn secondary small" data-r="0">Nicht gewusst</button><button class="btn secondary small" data-r="1">Ungefähr</button><button class="btn small" data-r="2">Gewusst</button></div>`
+        : `<div><button class="btn" data-a="show">Aufdecken</button></div><p class="tiny muted" style="margin-top:10px">Erst selbst erklären, dann aufdecken.</p>`}
+      <div style="margin-top:12px"><button class="btn ghost small" data-a="hide" title="Kommt nicht mehr vor">Allgemeinwortschatz – ausblenden</button></div></div>
+      <div class="tiny muted" style="text-align:center">${queue.length} Begriffe in dieser Runde</div>`;
+    el.innerHTML = html;
+    bindHeader();
+  };
+  const drawList = () => {
+    const list = pool();
+    const q = st.q.toLowerCase();
+    const shownList = q ? list.filter(t => (t.begriff + ' ' + t.definition).toLowerCase().includes(q)) : list;
+    el.innerHTML = header(list) + `<input type="text" id="tq" placeholder="Begriff suchen …" value="${esc(st.q)}" style="margin-bottom:10px">
+      <div class="card"><ul class="list">${shownList.sort((a, b) => a.begriff.localeCompare(b.begriff, 'de')).slice(0, 400).map(t => `<li style="display:block;padding:8px 0"><strong>${esc(t.begriff)}</strong> <span class="tiny muted">${esc(t.chapter)}</span><div class="small">${enrich(esc(t.definition))}${t.seite ? ` <span class="cite">[${esc(String(t.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</div></li>`).join('') || '<li class="muted small">Keine Treffer.</li>'}</ul></div>
+      ${Object.keys(hidden()).length ? `<div class="card small"><details><summary>Ausgeblendete Begriffe (${Object.keys(hidden()).length})</summary>${Object.keys(hidden()).map(k => `<button class="btn ghost small" data-unhide="${esc(k)}">↺ ${esc(k)}</button>`).join(' ')}</details></div>` : ''}`;
+    bindHeader();
+    const tq = el.querySelector('#tq'); tq.oninput = () => { st.q = tq.value; clearTimeout(el._t); el._t = setTimeout(() => { drawList(); const x = el.querySelector('#tq'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }, 300); };
+  };
+  const draw = () => (st.mode === 'liste' ? drawList() : drawCard());
+  const bindHeader = () => {
+    el.querySelector('#tbook').onchange = e => { st.book = e.target.value; queue = []; shown = false; draw(); };
+    el.querySelector('#tebene').onchange = e => { st.ebene = e.target.value; queue = []; shown = false; draw(); };
+  };
+  el.onclick = e => {
+    const m = e.target.closest('[data-mode]'); if (m) { st.mode = m.dataset.mode; draw(); return; }
+    const u = e.target.closest('[data-unhide]'); if (u) { store.update(s => { delete (s.progress.termsHidden ||= {})[u.dataset.unhide]; }); draw(); return; }
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    if (a === 'show') { shown = true; drawCard(); return; }
+    if (a === 'extra') { queue = pool().sort((x, y) => (prog()[x.key]?.box || 0) - (prog()[y.key]?.box || 0)).slice(0, 20); shown = false; drawCard(); return; }
+    if (a === 'hide' && cur) { store.update(s => { (s.progress.termsHidden ||= {})[cur.key] = true; }); queue.shift(); shown = false; drawCard(); return; }
+    const r = e.target.closest('[data-r]');
+    if (r && cur) {
+      const grade = +r.dataset.r;
+      store.update(s => {
+        const p = (s.progress.terms ||= {})[cur.key] || { box: 0 };
+        p.box = grade === 2 ? Math.min(5, (p.box || 0) + 1) : grade === 1 ? Math.max(1, p.box || 0) : 0;
+        p.due = Date.now() + (grade === 0 ? 0 : BOX_DAYS[p.box] * 86400000);
+        p.seen = (p.seen || 0) + 1;
+        s.progress.terms[cur.key] = p;
+      });
+      queue.shift();
+      if (grade === 0) queue.splice(Math.min(queue.length, 4), 0, cur); // gleich nochmal, nach ein paar anderen
+      shown = false; drawCard();
     }
   };
   draw();

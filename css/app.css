@@ -222,3 +222,9 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
   .skript-ch { break-before: auto; }
   a.norm, a.norm-ext { border: none; color: inherit; }
 }
+
+/* Reiter: am breiten Bildschirm umbrechen statt versteckt seitlich scrollen */
+@media (min-width: 700px) { .tabs { flex-wrap: wrap; overflow-x: visible; } }
+@media (max-width: 699px) { .tabs { mask-image: linear-gradient(to right, #000 85%, transparent); -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); } }
+.term-card { min-height: 180px; display: flex; flex-direction: column; justify-content: center; text-align: center; }
+.term-card .term { font-size: 1.35rem; font-weight: 700; }
