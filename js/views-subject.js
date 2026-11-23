@@ -340,7 +340,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
   setTitle(ch.title);
   markStudied(chId);
   const p = store.state.progress.chapters[chId];
-  const parts = [['zusammenfassung', 'Zusammenfassung'], ['test', 'Multiple Choice'], ['fragen', 'Freie Fragen'], ['karten', 'Karteikarten'], ['chat', 'Chat'], ['text', 'Lehrbuchtext']];
+  const parts = [['zusammenfassung', 'Zusammenfassung'], ['minifaelle', '🎯 Mini-Fälle'], ['test', 'Multiple Choice'], ['fragen', 'Freie Fragen'], ['karten', 'Karteikarten'], ['chat', 'Chat'], ['text', 'Lehrbuchtext']];
   el.innerHTML = `<div class="small muted">${esc(sub.name)} · ${esc(book.title)} · S. ${esc(ch.startLabel || ch.startPage)}–${esc(ch.endLabel || ch.endPage)}</div>
     <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %${p.levels ? ' (' + levelText(p) + ')' : ''}` : 'noch nicht eingestuft'}</span></div>
     ${isStudyChapter(ch) ? '' : `<div class="notice warn small">Dieses Kapitel zählt nicht als Lernstoff (z. B. Verzeichnis oder Übersicht) und kommt in Plan, Einstufung und Tests nicht vor. <button class="btn ghost small" data-vis="show">Doch als Lernstoff zählen</button></div>`}
@@ -411,6 +411,42 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
         { label: 'Frag mich ab', prompt: 'Frag mich zu diesem Kapitel ab: eine Frage nach der anderen, wie in einer Prüfung. Warte jeweils auf meine Antwort.' },
         { label: 'Einfach erklären', prompt: 'Erklär mir die Kernpunkte dieses Kapitels so einfach wie möglich, mit einem Beispiel.' },
         { label: 'Abgrenzungen', prompt: 'Welche Abgrenzungen und Stolperfallen muss ich in diesem Kapitel unbedingt kennen?' }
+      ]
+    });
+  }
+  if (part === 'minifaelle') {
+    const chRef = findChapter(store.subject(subId), chId).chapter;
+    store.update(() => { chRef.miniChat = chRef.miniChat || []; }, { silent: true });
+    const sumText = () => { const sm = chRef.summary || {}; return [sm.kurzfassung, ...(sm.themen || []).map(t => `### ${t.titel}\n${t.inhalt}`), 'Stolperfallen: ' + (sm.stolperfallen || []).map(x => x.text || x).join(' | ')].join('\n'); };
+    body.innerHTML = `<div class="notice small">So wie du es gewohnt bist: Ich stelle dir einen <strong>Mini-Fall</strong> zu diesem Kapitel, du antwortest in eigenen Worten (Ergebnis + kurze Begründung), und bekommst sofort Korrektur und Erklärung mit Seitenangabe. Danach kommt der nächste. Jede Antwort zählt für deinen Kenntnisstand. <span class="muted">Kosten: ca. 1–2 Cent pro Mini-Fall.</span></div><div id="chat"></div>`;
+    mountChat(body.querySelector('#chat'), {
+      history: chRef.miniChat,
+      onSave: () => store.update(() => {}, { silent: true }),
+      model: 'smart', maxTokens: 1500, purpose: 'Mini-Fälle',
+      system: async () => `Du trainierst mit einer Jus-Studentin (Österreich) das Lehrbuchkapitel „${ch.title}“ aus „${book.title}“ mit MINI-FÄLLEN. Grundlage ist ausschließlich das Kapitel unten.
+
+ABLAUF:
+1. Stelle genau EINEN Mini-Fall: Sachverhalt in 2–5 Sätzen mit konkreten Personen (A, B …) und eine klare Fallfrage (z. B. „Kann A von B … verlangen?“). Verrate die Lösung nicht. Wechsle zwischen Basiswissen und Sonderfällen/Abgrenzungen des Kapitels; wiederhole keine Fälle aus diesem Gespräch.
+2. Warte auf die Antwort.
+3. Beginne deine Korrektur IMMER mit genau einer dieser Zeilen: „✅ Richtig“, „🟡 Teilweise richtig“ oder „❌ Leider falsch“. Dann: die richtige Lösung kurz im Gutachtenstil (Anspruchsgrundlage → Voraussetzungen → Ergebnis), was an der Antwort gut war, was gefehlt hat, und warum – mit Seitenangabe [S. x] und Paragraphen.
+4. Stelle dann sofort den nächsten Mini-Fall.
+Sei freundlich, präzise, nicht ausschweifend. Frag nie nach Paragraphennummern als Selbstzweck.
+
+KAPITEL – ZUSAMMENFASSUNG:
+${clip(sumText(), 20000)}
+
+KAPITEL – LEHRBUCHTEXT:
+${clip(await chapterText(store.subject(subId), chId), 60000)}`,
+      onAnswer: answer => {
+        const r = /^\s*✅/.test(answer) ? 1 : /^\s*🟡/.test(answer) ? 0.5 : /^\s*❌/.test(answer) ? 0 : null;
+        if (r != null) recordLevelResult(chId, { basis: [r, 1] }, 'minifall');
+      },
+      placeholder: 'Deine Lösung (Ergebnis + kurze Begründung) …',
+      emptyText: 'Tippe auf „Ersten Mini-Fall“, um zu starten.',
+      quickPrompts: [
+        { label: '▶ Ersten Mini-Fall', prompt: 'Bitte stell mir den ersten Mini-Fall zu diesem Kapitel.' },
+        { label: 'Weiß ich nicht – Lösung zeigen', prompt: 'Ich weiß es nicht. Bitte zeig mir die Lösung mit Erklärung und stell dann den nächsten Mini-Fall.' },
+        { label: 'Schwieriger', prompt: 'Bitte ab jetzt schwierigere Mini-Fälle mit Sonderfällen und Abgrenzungen.' }
       ]
     });
   }
