@@ -155,8 +155,11 @@ export async function renderPdfPages(buffer, pageNumbers, { scale = 1.8, quality
     let angle = 0;
     try {
       const tc = await page.getTextContent();
-      const it = tc.items.find(x => /VISUALISIERUNG/.test(x.str || '')) || tc.items.find(x => (x.str || '').length > 12);
-      if (it?.transform) { const [a, b] = it.transform; const deg = Math.round(Math.atan2(b, a) * 180 / Math.PI / 90) * 90; angle = ((deg % 360) + 360) % 360; }
+      // Mehrheit der Textstücke entscheidet (Kopfzeilen am Rand können gedreht sein, der Inhalt nicht)
+      const votes = {};
+      for (const it of tc.items) { if (!it.transform || (it.str || '').trim().length < 3) continue; const [a, b] = it.transform; const deg = (((Math.round(Math.atan2(b, a) * 180 / Math.PI / 90) * 90) % 360) + 360) % 360; votes[deg] = (votes[deg] || 0) + it.str.length; }
+      const best = Object.entries(votes).sort((x, y) => y[1] - x[1])[0];
+      angle = best ? +best[0] : 0;
     } catch {}
     let final = canvas;
     if (angle) {
