@@ -66,15 +66,21 @@ async function anthropic(key, model, system, messages, maxTokens, cacheSystem, s
   const body = {
     model, max_tokens: maxTokens, stream: true,
     // ohne „Nachdenken“: sonst verbraucht das Modell die Ausgabe-Tokens dafür (kostet und schneidet Antworten ab)
-    thinking: { type: 'disabled' },
+    thinking: thinkingOff(model),
     system: [{ type: 'text', text: system, ...(cacheSystem && system.length > 4000 ? { cache_control: { type: 'ephemeral' } } : {}) }],
     messages: messages.map(m => ({ role: m.role, content: m.content }))
   };
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const send = () => fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', signal,
     headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify(body)
   });
+  let res = await send();
+  if (res.status === 400) {
+    // falscher Wert für „Nachdenken aus“? Richtigen Wert aus der Fehlermeldung übernehmen und einmal neu senden
+    const txt = await res.clone().text();
+    if (learnThinking(model, txt)) { body.thinking = thinkingOff(model); res = await send(); }
+  }
   if (!res.ok) throw await httpErr(res, 'Claude');
   if ((res.headers.get('content-type') || '').includes('application/json')) {
     const j = await res.json();
@@ -210,6 +216,18 @@ export function clip(text, max = 300000) {
 }
 
 // ---------- Hintergrund-Modus (Message Batches, halber Preis) ----------
+// „Nachdenken“ abschalten – je nach Modell heißt das unterschiedlich (Fehlermeldung der API nennt den richtigen Wert)
+const THINK_OFF = {};
+function thinkingOff(model) {
+  if (THINK_OFF[model]) return THINK_OFF[model];
+  return /haiku/i.test(model) ? { type: 'disabled' } : { type: 'between_tools' };
+}
+function learnThinking(model, msg) {
+  const m = String(msg || '').match(/"thinking":\s*\{\s*"type":\s*"([a-z_]+)"\s*\}\s*instead/);
+  if (m) { THINK_OFF[model] = { type: m[1] }; return true; }
+  return false;
+}
+
 // Batch-Schnittstelle: über die eigene Vercel-Funktion (der Browser darf sie nicht direkt aufrufen)
 function batchUrl(path) {
   const hosted = location.protocol.startsWith('http') && !/^(localhost|127\.)/.test(location.hostname) && !location.hostname.endsWith('.netlify.app');
@@ -225,7 +243,7 @@ export async function submitBatch(reqs) {
   const c = cfg();
   const requests = reqs.map(r => {
     const sys = BASE_RULES + '\n\n' + (r.system || '') + '\n\nAntworte AUSSCHLIESSLICH mit gültigem JSON ohne erklärenden Text davor oder danach.';
-    return { custom_id: r.id, params: { model: c.models[r.model || 'smart'] || (r.model === 'book' ? c.models.fast : null) || c.models.smart, max_tokens: r.maxTokens || 8000, thinking: { type: 'disabled' }, system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.content || r.prompt }] } };
+    return { custom_id: r.id, params: (() => { const m = c.models[r.model || 'smart'] || (r.model === 'book' ? c.models.fast : null) || c.models.smart; return { model: m, max_tokens: r.maxTokens || 8000, thinking: thinkingOff(m), system: [{ type: 'text', text: sys }], messages: [{ role: 'user', content: r.content || r.prompt }] }; })() };
   });
   const res = await fetch(batchUrl('messages/batches'), { method: 'POST', headers: AH(c.key), body: JSON.stringify({ requests }) });
   if (!res.ok) throw await httpErr(res, 'Claude (Hintergrund)');
