@@ -139,7 +139,7 @@ export function isSupported(f) {
 
 
 // Eine PDF-Seite als JPEG (Base64) rendern – für Grafiken wie „Visualisierung“ im Lehrbuch
-export async function renderPdfPages(buffer, pageNumbers, { scale = 1.5, quality = 0.72 } = {}) {
+export async function renderPdfPages(buffer, pageNumbers, { scale = 1.8, quality = 0.72 } = {}) {
   const lib = await pdfjs();
   const doc = await lib.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false }).promise;
   const out = {};
@@ -151,7 +151,23 @@ export async function renderPdfPages(buffer, pageNumbers, { scale = 1.5, quality
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    out[n] = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+    // Querformat-Grafiken sind im Buch oft gedreht gedruckt – anhand der Überschrift geradestellen
+    let angle = 0;
+    try {
+      const tc = await page.getTextContent();
+      const it = tc.items.find(x => /VISUALISIERUNG/.test(x.str || '')) || tc.items.find(x => (x.str || '').length > 12);
+      if (it?.transform) { const [a, b] = it.transform; const deg = Math.round(Math.atan2(b, a) * 180 / Math.PI / 90) * 90; angle = ((deg % 360) + 360) % 360; }
+    } catch {}
+    let final = canvas;
+    if (angle) {
+      const r = document.createElement('canvas');
+      const swap = angle === 90 || angle === 270;
+      r.width = swap ? canvas.height : canvas.width; r.height = swap ? canvas.width : canvas.height;
+      const rc = r.getContext('2d');
+      rc.translate(r.width / 2, r.height / 2); rc.rotate(angle * Math.PI / 180); rc.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+      final = r;
+    }
+    out[n] = final.toDataURL('image/jpeg', quality).split(',')[1];
     page.cleanup();
   }
   try { await doc.destroy(); } catch {}

@@ -1050,7 +1050,7 @@ export async function buildVisuals(subId, fileId, onStatus = () => {}) {
   const dl = await downloadFile({ id: fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name });
   const { renderPdfPages } = await import('./extract.js');
   onStatus(`Bereite ${todo.length} Grafiken vor …`);
-  const imgs = await renderPdfPages(dl.buffer, todo.map(v => v.page), { scale: 1.35, quality: 0.68 });
+  const imgs = await renderPdfPages(dl.buffer, todo.map(v => v.page), { scale: 1.8, quality: 0.7 });
   // Vercel nimmt höchstens ~4,5 MB pro Anfrage – bei sehr vielen Grafiken den Rest später nachschicken
   let size = 0;
   for (let k = 0; k < todo.length; k++) { size += (imgs[todo[k].page] || '').length + 40000; if (size > 3500000) { todo.length = k; break; } }
