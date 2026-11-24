@@ -277,3 +277,4 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
 .skript-sec { border-radius: 12px; padding: 8px 12px; margin: 8px 0; }
 .skript-sec.ag { background: var(--p-blue); } .skript-sec.pr { background: var(--p-green); } .skript-sec.fa { background: var(--p-rose); }
 .skript-sec.rs { background: var(--p-lemon); } .skript-sec.bs { background: var(--p-mint); }
+.painted .steps > li > div > strong, .painted .no-paint { background: none; padding: 0; }
