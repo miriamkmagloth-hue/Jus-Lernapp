@@ -139,40 +139,48 @@ export function isSupported(f) {
 
 
 // Eine PDF-Seite als JPEG (Base64) rendern – für Grafiken wie „Visualisierung“ im Lehrbuch
-export async function renderPdfPages(buffer, pageNumbers, { scale = 1.8, quality = 0.72 } = {}) {
+export async function openPdf(buffer) {
   const lib = await pdfjs();
-  const doc = await lib.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false }).promise;
-  const out = {};
-  for (const n of pageNumbers) {
-    const page = await doc.getPage(n);
-    const vp = page.getViewport({ scale });
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    // Querformat-Grafiken sind im Buch oft gedreht gedruckt – anhand der Überschrift geradestellen
-    let angle = 0;
-    try {
-      const tc = await page.getTextContent();
-      // Mehrheit der Textstücke entscheidet (Kopfzeilen am Rand können gedreht sein, der Inhalt nicht)
-      const votes = {};
-      for (const it of tc.items) { if (!it.transform || (it.str || '').trim().length < 3) continue; const [a, b] = it.transform; const deg = (((Math.round(Math.atan2(b, a) * 180 / Math.PI / 90) * 90) % 360) + 360) % 360; votes[deg] = (votes[deg] || 0) + it.str.length; }
-      const best = Object.entries(votes).sort((x, y) => y[1] - x[1])[0];
-      angle = best ? +best[0] : 0;
-    } catch {}
-    let final = canvas;
-    if (angle) {
-      const r = document.createElement('canvas');
-      const swap = angle === 90 || angle === 270;
-      r.width = swap ? canvas.height : canvas.width; r.height = swap ? canvas.width : canvas.height;
-      const rc = r.getContext('2d');
-      rc.translate(r.width / 2, r.height / 2); rc.rotate(angle * Math.PI / 180); rc.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
-      final = r;
-    }
-    out[n] = final.toDataURL('image/jpeg', quality).split(',')[1];
-    page.cleanup();
+  return lib.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false }).promise;
+}
+
+// eine Seite eines geöffneten PDFs als JPEG (base64) – mit automatischer Drehung
+export async function renderPdfPage(doc, n, { scale = 1.8, quality = 0.72 } = {}) {
+  const page = await doc.getPage(n);
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  // Querformat-Grafiken sind im Buch oft gedreht gedruckt – anhand der Textrichtung geradestellen
+  let angle = 0;
+  try {
+    const tc = await page.getTextContent();
+    // Mehrheit der Textstücke entscheidet (Kopfzeilen am Rand können gedreht sein, der Inhalt nicht)
+    const votes = {};
+    for (const it of tc.items) { if (!it.transform || (it.str || '').trim().length < 3) continue; const [a, b] = it.transform; const deg = (((Math.round(Math.atan2(b, a) * 180 / Math.PI / 90) * 90) % 360) + 360) % 360; votes[deg] = (votes[deg] || 0) + it.str.length; }
+    const best = Object.entries(votes).sort((x, y) => y[1] - x[1])[0];
+    angle = best ? +best[0] : 0;
+  } catch {}
+  let final = canvas;
+  if (angle) {
+    const r = document.createElement('canvas');
+    const swap = angle === 90 || angle === 270;
+    r.width = swap ? canvas.height : canvas.width; r.height = swap ? canvas.width : canvas.height;
+    const rc = r.getContext('2d');
+    rc.translate(r.width / 2, r.height / 2); rc.rotate(angle * Math.PI / 180); rc.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+    final = r;
   }
+  const out = final.toDataURL('image/jpeg', quality).split(',')[1];
+  page.cleanup();
+  return out;
+}
+
+export async function renderPdfPages(buffer, pageNumbers, opts = {}) {
+  const doc = await openPdf(buffer);
+  const out = {};
+  for (const n of pageNumbers) out[n] = await renderPdfPage(doc, n, opts);
   try { await doc.destroy(); } catch {}
   return out;
 }

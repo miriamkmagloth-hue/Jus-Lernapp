@@ -82,17 +82,72 @@ export async function openPages({ subId, chId, fileId, ref }) {
     }
     const nums = [...wanted].sort((a, b) => a - b);
     if (!nums.length) throw new Error('Seite nicht gefunden');
-    // direkt die Originalseiten aus dem Buch zeigen (PDF bleibt für weitere Aufrufe im Speicher)
-    body.innerHTML = busy(`Lade ${nums.length > 1 ? 'die Seiten' : 'die Seite'} aus dem Buch …`);
-    const { renderPdfPages } = await import('./extract.js');
-    let buf = PDF_CACHE.get(book.fileId);
-    if (!buf) {
+    // ganzes Buch öffnen, an der verwiesenen Seite beginnen – vor und zurück blättern
+    body.innerHTML = busy('Lade das Buch …');
+    const { openPdf, renderPdfPage } = await import('./extract.js');
+    let doc = PDF_CACHE.get(book.fileId);
+    if (!doc) {
       const { downloadFile } = await import('./drive.js');
       const f = sub.files[book.fileId];
-      buf = (await downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name })).buffer;
-      PDF_CACHE.clear(); PDF_CACHE.set(book.fileId, buf);
+      const buf = (await downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name })).buffer;
+      for (const d of PDF_CACHE.values()) { try { d.destroy(); } catch {} }
+      PDF_CACHE.clear();
+      doc = await openPdf(buf);
+      PDF_CACHE.set(book.fileId, doc);
     }
-    const imgs = await renderPdfPages(buf.slice(0), nums, { scale: 1.7, quality: 0.85 });
-    body.innerHTML = `<div style="max-height:75vh;overflow:auto">${nums.map(n => `<div class="tiny muted" style="margin:8px 0 4px">Seite ${esc(t.pages[n - 1].label)}</div><img src="data:image/jpeg;base64,${imgs[n]}" style="width:100%;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.12)">`).join('')}</div>`;
+    const total = doc.numPages;
+    const marked = new Set(nums);
+    const label = n => t.pages[n - 1]?.label ?? n;
+    const imgCache = new Map();
+    const getImg = n => { if (!imgCache.has(n)) imgCache.set(n, renderPdfPage(doc, n, { scale: 1.7, quality: 0.85 })); return imgCache.get(n); };
+    body.innerHTML = `<div class="row between" style="margin:8px 0;gap:6px;flex-wrap:nowrap">
+        <button class="btn secondary small" data-prev>◀ zurück</button>
+        <span class="small" data-lbl style="text-align:center"></span>
+        <button class="btn secondary small" data-next>weiter ▶</button>
+      </div>
+      <div data-view style="max-height:72vh;overflow:auto;touch-action:pan-y pinch-zoom"></div>
+      <div class="row" style="margin-top:6px;gap:6px;justify-content:center">
+        <span class="tiny muted">Gehe zu Seite</span><input data-go type="text" inputmode="numeric" style="width:70px" placeholder="${esc(label(nums[0]))}">
+      </div>`;
+    const view = body.querySelector('[data-view]'), lbl = body.querySelector('[data-lbl]');
+    let cur = nums[0], token = 0;
+    const show = async n => {
+      cur = Math.max(1, Math.min(total, n));
+      const my = ++token;
+      lbl.innerHTML = `Seite <b>${esc(label(cur))}</b>${marked.has(cur) ? ' <span class="tag">verwiesen</span>' : ''}<br><span class="tiny muted">${cur} / ${total}</span>`;
+      body.querySelector('[data-prev]').disabled = cur <= 1;
+      body.querySelector('[data-next]').disabled = cur >= total;
+      if (!imgCache.has(cur)) view.innerHTML = busy('Seite wird geladen …');
+      try {
+        const img = await getImg(cur);
+        if (my !== token) return;
+        view.innerHTML = `<img src="data:image/jpeg;base64,${img}" style="width:100%;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.12)${marked.has(cur) ? ';outline:3px solid var(--p-lemon, #fff3b0)' : ''}">`;
+        view.scrollTop = 0;
+        // Nachbarseiten schon vorbereiten
+        if (cur < total) getImg(cur + 1).catch(() => {});
+        if (cur > 1) getImg(cur - 1).catch(() => {});
+      } catch (e) { if (my === token) { imgCache.delete(cur); view.innerHTML = `<div class="notice err small">${esc(e.message)}</div>`; } }
+    };
+    body.querySelector('[data-prev]').onclick = () => show(cur - 1);
+    body.querySelector('[data-next]').onclick = () => show(cur + 1);
+    body.querySelector('[data-go]').onchange = e => {
+      const v = e.target.value.trim(); const n = byLabel.get(v);
+      if (n) show(n); else e.target.value = '';
+    };
+    // Wischen am Handy
+    let sx = null, sy = null;
+    view.addEventListener('touchstart', e => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sx = null; }, { passive: true });
+    view.addEventListener('touchend', e => {
+      if (sx == null) return; const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) show(cur + (dx < 0 ? 1 : -1));
+    }, { passive: true });
+    // Pfeiltasten am Laptop
+    const onKey = e => {
+      if (!document.body.contains(view)) { document.removeEventListener('keydown', onKey); return; }
+      if (e.target.matches?.('input,textarea')) return;
+      if (e.key === 'ArrowRight') show(cur + 1); else if (e.key === 'ArrowLeft') show(cur - 1);
+    };
+    document.addEventListener('keydown', onKey);
+    await show(cur);
   } catch (err) { body.innerHTML = `<div class="notice err small">${esc(err.message)}</div>`; }
 }
