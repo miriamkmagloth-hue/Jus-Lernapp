@@ -294,3 +294,15 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
 body.has-player .app { padding-bottom: 170px; }
 @media (min-width: 900px) { .player { left: 216px; right: 16px; bottom: 16px; max-width: 980px; } }
 @media print { .player { display: none; } }
+
+/* Lob */
+.cheer { position: fixed; left: 50%; top: 18%; transform: translate(-50%, 0) scale(.9); z-index: 60; padding: 14px 22px; border-radius: 18px; font-weight: 700; font-size: 1.05rem; text-align: center; max-width: 86vw; box-shadow: 0 8px 28px rgba(0,0,0,.16); animation: cheer-in .35s cubic-bezier(.2,1.4,.4,1) forwards; pointer-events: none; color: #2b2b3a; }
+.cheer-ok { background: #d9f3dc; border: 2px solid #9fdba8; }
+.cheer-mid { background: #fff4c2; border: 2px solid #f0d978; }
+.cheer-soft { background: #f3e9fb; border: 2px solid #d6c2ef; }
+.cheer.out { transition: opacity .45s, transform .45s; opacity: 0; transform: translate(-50%, -16px) scale(.95); }
+@keyframes cheer-in { from { opacity: 0; transform: translate(-50%, 14px) scale(.8); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+.confetti { position: fixed; inset: 0; pointer-events: none; z-index: 59; overflow: hidden; }
+.confetti i { position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 3px; animation: confetti-fall 2.2s ease-in forwards; }
+@keyframes confetti-fall { to { top: 105vh; transform: rotate(540deg) translateX(30px); opacity: .7; } }
+@media (prefers-reduced-motion: reduce) { .cheer, .confetti i { animation: none; } }

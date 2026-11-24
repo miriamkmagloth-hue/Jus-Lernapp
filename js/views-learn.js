@@ -1,4 +1,5 @@
 // Lernfunktionen: Multiple Choice, freie Fragen, Karteikarten, Falltraining, mündliche Simulation, Einstufungstest
+import { cheer, cheerText, finishText } from './cheer.js';
 import { store, uid, allChapters, findChapter } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, ampel } from './ui.js';
 import { setTitle, render } from './app.js';
@@ -91,7 +92,8 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
       addLevel(perChapter, cid, q, ok);
       if (!ok) addMistake({ subId: sub.id, chapterId: cid, chapterTitle: findChapter(sub, cid)?.chapter.title, question: q.frage, yourAnswer: q.opts[k].text, correct: q.opts.find(o => o.ok)?.text, explanation: q.erklaerung });
       el.querySelectorAll('.mc-option').forEach((b, j) => { b.disabled = true; if (q.opts[j].ok) b.classList.add('correct'); else if (j === k) b.classList.add('wrong'); });
-      el.querySelector('#fb').innerHTML = `<div class="notice ${ok ? 'ok' : 'err'}" data-chid="${esc(cid || '')}" style="margin-top:10px"><strong>${ok ? 'Richtig!' : 'Leider falsch.'}</strong> ${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}${md(q.erklaerung)}</div>
+      const praise = cheer(ok ? 1 : 0);
+      el.querySelector('#fb').innerHTML = `<div class="notice ${ok ? 'ok' : 'err'}" data-chid="${esc(cid || '')}" style="margin-top:10px"><strong>${esc(praise)}</strong>${ok ? '' : ' <span class="small">Richtig wäre die grün markierte Antwort.</span>'} ${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}${md(q.erklaerung)}</div>
         <button class="btn block" data-a="next">${i + 1 < qs.length ? 'Weiter' : 'Ergebnis'}</button>`;
       el.querySelector('[data-a=next]').onclick = () => { i++; i < qs.length ? show() : finish(); };
     };
@@ -101,7 +103,7 @@ export function mountQuiz(el, sub, chapterIds, { title = '', count = 8 } = {}) {
       const sum = k => Object.values(perChapter).reduce((a, x) => [a[0] + x[k][0], a[1] + x[k][1]], [0, 0]);
       const sb = sum('basis'), sv = sum('vertiefung');
       store.update(s => { s.progress.quizzes.push({ at: Date.now(), subId: sub.id, chapterIds, score: frac, n: qs.length }); if (s.progress.quizzes.length > 1000) s.progress.quizzes = s.progress.quizzes.slice(-1000); }, { silent: true });
-      el.innerHTML = `<div class="card" style="text-align:center"><div style="font-size:2.4rem;font-weight:700">${right}/${qs.length}</div><div class="small muted">${sb[1] ? `Basis ${sb[0]}/${sb[1]}` : ''}${sb[1] && sv[1] ? ' · ' : ''}${sv[1] ? `Vertiefung ${sv[0]}/${sv[1]}` : ''}</div><p>${frac >= 0.85 ? 'Sehr gut – das sitzt!' : frac >= 0.6 ? 'Gut, ein paar Lücken. Falsche Antworten sind im Fehlerbuch.' : 'Hier lohnt sich nochmal die Zusammenfassung. Falsche Antworten sind im Fehlerbuch.'}</p>
+      el.innerHTML = `<div class="card" style="text-align:center"><div style="font-size:2.4rem;font-weight:700">${right}/${qs.length}</div><div class="small muted">${sb[1] ? `Basis ${sb[0]}/${sb[1]}` : ''}${sb[1] && sv[1] ? ' · ' : ''}${sv[1] ? `Vertiefung ${sv[0]}/${sv[1]}` : ''}</div><p style="font-size:1.05rem">${esc(finishText(frac))}</p>${right < qs.length ? '<p class="small muted">Die falschen Antworten liegen im Fehlerbuch – dort kannst du sie gezielt wiederholen.</p>' : ''}
         <div class="row" style="justify-content:center"><button class="btn" data-a="again">Neuer Test</button><a class="btn secondary" href="#/fehlerbuch">Fehlerbuch</a></div></div>`;
       el.querySelector('[data-a=again]').onclick = start;
     };
@@ -141,8 +143,9 @@ export function mountFreeQuestion(el, sub, ch) {
           });
           const frac = Math.max(0, Math.min(10, Number(g.punkte) || 0)) / 10;
           recordLevelResult(ch.id, { [lvlOf(q)]: [frac, 1] }, 'frei');
+          const praise = cheer(frac >= 0.75 ? 1 : frac >= 0.4 ? 0.5 : 0);
           if (frac < 0.6) addMistake({ subId: sub.id, chapterId: ch.id, chapterTitle: ch.title, question: q.frage, yourAnswer: ans, correct: (q.kernpunkte || []).join('; '), explanation: q.musterantwort });
-          res.innerHTML = `<hr><div class="row between"><h4 style="margin:0">Bewertung</h4><span class="pill ${frac >= 0.75 ? 'green' : frac >= 0.45 ? 'yellow' : 'red'}">${g.punkte}/10</span></div>
+          res.innerHTML = `<hr><div class="row between"><h4 style="margin:0">Bewertung</h4><span class="pill ${frac >= 0.75 ? 'green' : frac >= 0.45 ? 'yellow' : 'red'}">${g.punkte}/10</span></div><p><strong>${esc(praise)}</strong></p>
             ${g.richtig?.length ? `<div class="small"><strong>Gut:</strong><ul>${g.richtig.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
             ${g.fehlt?.length ? `<div class="small"><strong>Fehlt / ungenau:</strong><ul>${g.fehlt.map(x => `<li>${enrich(esc(x))}</li>`).join('')}</ul></div>` : ''}
             ${md(g.feedback)}<details><summary>Musterantwort</summary>${md(q.musterantwort)}</details>
@@ -211,7 +214,7 @@ function reviewSession(el, items, onDone) {
   let i = 0, known = 0;
   const show = () => {
     if (i >= items.length) {
-      el.innerHTML = `<div class="card" style="text-align:center"><h3>Fertig!</h3><p>${known} von ${items.length} gewusst.</p><button class="btn" data-a="done">OK</button></div>`;
+      el.innerHTML = `<div class="card" style="text-align:center"><h3>Fertig! 🎉</h3><p>${known} von ${items.length} gewusst.</p><p>${esc(finishText(items.length ? known / items.length : 1))}</p><button class="btn" data-a="done">OK</button></div>`;
       el.querySelector('[data-a=done]').onclick = () => { el.removeAttribute('data-no-rerender'); onDone && onDone(); };
       // Kenntnisstand pro Kapitel leicht anpassen
       const per = {};
@@ -230,6 +233,7 @@ function reviewSession(el, items, onDone) {
   };
   const rate = r => {
     const it = items[i];
+    cheer(r === 2 ? 1 : r === 1 ? 0.5 : 0);
     store.update(st => {
       const s = st.srs[it.card.id] || { box: 0, due: 0 };
       if (r === 0) { s.box = 0; s.due = Date.now() + 10 * 60000; }
@@ -387,11 +391,13 @@ export function caseView(el, subId, preset) {
           });
           const frac = Math.max(0, Math.min(100, Number(g.punkte) || 0)) / 100;
           c.graded = true; c.grade = g; persist();
+          const praise = frac >= 0.75 ? finishText(0.95) : frac >= 0.45 ? finishText(0.6) : finishText(0.2);
+          cheer(frac >= 0.6 ? 1 : frac >= 0.3 ? 0.5 : 0, { silent: false });
           sessionStorage.removeItem('case:' + subId);
           if (c.kapitelIds?.length) recordResult(c.kapitelIds.filter(id => findChapter(sub, id)), frac, 'fall');
           store.update(s => { s.progress.cases.push({ at: Date.now(), subId, title: c.titel, mode: c.cfg.mode, score: frac }); }, { silent: true });
           (g.fehlend || []).forEach(m => addMistake({ subId, chapterTitle: 'Fall: ' + c.titel, question: 'Übersehen im Fall „' + c.titel + '“', correct: m, explanation: '' }));
-          res.innerHTML = `<div class="card"><div class="row between"><h3 style="margin:0">Korrektur</h3><span class="pill ${frac >= 0.75 ? 'green' : frac >= 0.45 ? 'yellow' : 'red'}">${g.punkte}/100</span></div>
+          res.innerHTML = `<div class="card"><div class="row between"><h3 style="margin:0">Korrektur</h3><span class="pill ${frac >= 0.75 ? 'green' : frac >= 0.45 ? 'yellow' : 'red'}">${g.punkte}/100</span></div><p><strong>${esc(praise)}</strong></p>
             ${g.gefunden?.length ? `<h4>✓ Erkannt</h4><ul>${g.gefunden.map(x => `<li>${enrich(esc(x))}</li>`).join('')}</ul>` : ''}
             ${g.fehlend?.length ? `<h4>✗ Übersehen</h4><ul>${g.fehlend.map(x => `<li>${enrich(esc(x))}</li>`).join('')}</ul>` : ''}
             ${g.ueberfluessig?.length ? `<h4>– Überflüssig / falsch</h4><ul>${g.ueberfluessig.map(x => `<li>${enrich(esc(x))}</li>`).join('')}</ul>` : ''}
@@ -651,7 +657,8 @@ export function assessmentView(el, subId, examId, onlyChapter) {
           score[q.kapitelId][l][1]++;
           if (ok) score[q.kapitelId][l][0] += guess ? 0.5 : 1;
           el.querySelectorAll('.mc-option').forEach((bb, j) => { bb.disabled = true; if (j < q.opts.length && q.opts[j].ok) bb.classList.add('correct'); else if (+bb.dataset.k === k) bb.classList.add('wrong'); });
-          el.querySelector('#fb').innerHTML = `<div class="small" data-chid="${esc(q.kapitelId || '')}" style="margin:10px 0">${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span> ` : ''}${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
+          const praise = k >= 0 ? cheer(ok ? 1 : 0) : '';
+          el.querySelector('#fb').innerHTML = `${praise ? `<div class="notice ${ok ? 'ok' : 'err'} small" style="margin-top:10px"><strong>${esc(praise)}</strong></div>` : ''}<div class="small" data-chid="${esc(q.kapitelId || '')}" style="margin:10px 0">${q.seite ? `<span class="cite">[${esc(String(q.seite).replace(/^\[|\]$/g, ''))}]</span> ` : ''}${enrich(esc(q.erklaerung || ''))}</div><button class="btn block" data-a="n">Weiter</button>`;
           el.querySelector('[data-a=n]').onclick = () => { i++; show(); };
         });
       };

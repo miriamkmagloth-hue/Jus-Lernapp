@@ -1,4 +1,5 @@
 // Ansichten innerhalb eines Fachs
+import { cheer } from './cheer.js';
 import { playAudio, audioSupported, summaryListenText, skriptListenText } from './audio.js';
 import { paint, legend } from './paint.js';
 import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam, collectionCases } from './store.js';
@@ -464,7 +465,7 @@ KAPITEL – LEHRBUCHTEXT:
 ${clip(await chapterText(store.subject(subId), chId), 60000)}`,
       onAnswer: answer => {
         const r = /^\s*✅/.test(answer) ? 1 : /^\s*🟡/.test(answer) ? 0.5 : /^\s*❌/.test(answer) ? 0 : null;
-        if (r != null) recordLevelResult(chId, { basis: [r, 1] }, 'minifall');
+        if (r != null) { recordLevelResult(chId, { basis: [r, 1] }, 'minifall'); cheer(r); }
       },
       placeholder: 'Deine Lösung (Ergebnis + kurze Begründung) …',
       emptyText: 'Tippe auf „Ersten Mini-Fall“, um zu starten.',
@@ -978,6 +979,7 @@ function tabBegriffe(el, sub) {
       });
       // zählt (vorsichtig) für den Kenntnisstand des Kapitels
       if (cur.chId) recordLevelResult(cur.chId, { [cur.ebene === 'vertiefung' ? 'vertiefung' : 'basis']: [grade === 2 ? 1 : grade === 1 ? 0.5 : 0, 1] }, 'begriffe');
+      cheer(grade === 2 ? 1 : grade === 1 ? 0.5 : 0);
       queue.shift();
       if (grade === 0) queue.splice(Math.min(queue.length, 4), 0, cur); // gleich nochmal, nach ein paar anderen
       shown = false; drawCard();
