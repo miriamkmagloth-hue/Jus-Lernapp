@@ -52,6 +52,7 @@ export function finishText(frac) {
 export function todayStats() { const s = load(); return { right: s.todayRight || 0, all: s.todayAll || 0, days: s.lastActive === today() ? s.days || 1 : 0 }; }
 
 function show(msg, kind, confetti) {
+  document.querySelectorAll('.cheer').forEach(x => x.remove());
   const el = document.createElement('div');
   el.className = 'cheer cheer-' + kind;
   el.textContent = msg;
