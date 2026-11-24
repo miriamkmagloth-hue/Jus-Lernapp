@@ -65,7 +65,8 @@ function mergeSubjects(base = [], other = []) {
       books: mergeBooks(s.books, x.books),
       units: mergeList(s.units, x.units, 'fileId', (a, b) => a.analysis && !b.analysis),
       altklausuren: mergeList(s.altklausuren, x.altklausuren, 'fileId', (a, b) => a.analysis && !b.analysis),
-      rulings: mergeList(s.rulings, x.rulings, 'id', (a, b) => (a.head && !b.head) || (a.summary && !b.summary) || (a.chapterIds?.length && !b.chapterIds?.length)),
+      rulings: mergeList(s.rulings, x.rulings, 'id', (a, b) => (a.head && !b.head) || (a.summary && !b.summary) || (a.erkl && !b.erkl) || (a.chapterIds?.length && !b.chapterIds?.length)),
+      kompakt: (x.kompakt?.at || 0) > (s.kompakt?.at || 0) ? x.kompakt : s.kompakt,
       chat: (x.chat || []).length > (s.chat || []).length ? x.chat : s.chat,
     };
   });

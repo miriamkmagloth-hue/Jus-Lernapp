@@ -306,3 +306,13 @@ body.has-player .app { padding-bottom: 170px; }
 .confetti i { position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 3px; animation: confetti-fall 2.2s ease-in forwards; }
 @keyframes confetti-fall { to { top: 105vh; transform: rotate(540deg) translateX(30px); opacity: .7; } }
 @media (prefers-reduced-motion: reduce) { .cheer, .confetti i { animation: none; } }
+
+/* Prüfungs-Kompakt */
+.stars { white-space: nowrap; letter-spacing: 1px; font-size: .9rem; }
+.stars.s3 { color: #d98a00; } .stars.s2 { color: #e0a93b; } .stars.s1 { color: #c9b98f; } .stars.s0 { color: #ccc; }
+.kp-fokus { background: rgba(255,255,255,.7); border-left: 3px solid #f0b84b; border-radius: 8px; padding: 8px 10px; margin: 6px 0 10px; }
+.kp-theme { margin: 12px 0; }
+.kp-bar { height: 8px; background: #f1ecfa; border-radius: 6px; overflow: hidden; margin: 4px 0; }
+.kp-bar > div { height: 100%; background: linear-gradient(90deg, #c9b8f0, #f3b6cf); border-radius: 6px; }
+@media (max-width: 600px) { .kp-ch ol.small, .card ol.small[style*="columns"] { columns: 1 !important; } }
+@media print { .kp-ch { break-inside: avoid-page; } }
