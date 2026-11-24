@@ -144,6 +144,7 @@ export function normalizeSubject(sub) {
     rulings: sub.rulings || [],
     rulingMeta: sub.rulingMeta || { lastCheck: null, norms: [] },
     lastScan: sub.lastScan || null,
+    kompakt: sub.kompakt || null,
     chat: Array.isArray(sub.chat) ? sub.chat.slice(-60) : []
   };
 }
