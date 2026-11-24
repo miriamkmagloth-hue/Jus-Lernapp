@@ -1,4 +1,5 @@
 // Ansichten innerhalb eines Fachs
+import { playAudio, audioSupported, summaryListenText, skriptListenText } from './audio.js';
 import { paint, legend } from './paint.js';
 import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam, collectionCases } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
@@ -268,7 +269,7 @@ function tabStoff(el, sub) {
     if (role !== 'stoff') return `<div class="card" id="buch-${b.fileId}" style="${role === 'aus' ? 'opacity:.6' : ''}"><div class="row between"><div><div class="item-title">${role === 'aus' ? '⛔' : '📖'} ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div><div class="small muted">${role === 'aus' ? (b.dupOf ? `ältere Auflage von „${esc(sub.books.find(x => x.fileId === b.dupOf)?.title || '')}“ – wird nicht verwendet` : 'wird nicht verwendet') : b.status === 'nachschlagbar' ? 'eingelesen – Paragraphen können darin nachgeschlagen werden' : job && !job.done ? 'wird eingelesen …' : 'wird beim nächsten Durchlauf eingelesen'}</div></div>${roleSel}</div></div>`;
     return `<div class="card" id="buch-${b.fileId}"><div class="row between"><div><div class="item-title">📘 ${esc(b.title)} <button class="btn ghost small" data-rename="${b.fileId}" title="Umbenennen">✎</button></div>${b.authors?.length ? `<div class="small">${esc(b.authors.join(' / '))}${b.edition ? ' · ' + esc(b.edition) : ''}</div>` : ''}<div class="small muted">${b.numPages ? b.numPages + ' Seiten · ' : ''}${b.chapters.length} Kapitel · ${done} zusammengefasst${b.status === 'pausiert' ? ' · angehalten' : ''}</div></div>
       <div class="row">${roleSel}</div></div>${bookAction(b, job)}${bookNotes(b, sub)}
-      ${b.chapters.some(c => c.summary) ? `<div style="margin-top:8px"><a class="btn secondary small" href="#/fach/${sub.id}/skript/${b.fileId}">📄 Falllösungs-Skript zum ganzen Buch</a></div>` : ''}
+      ${b.chapters.some(c => c.summary) ? `<div class="row" style="margin-top:8px"><a class="btn secondary small" href="#/fach/${sub.id}/skript/${b.fileId}">📄 Falllösungs-Skript zum ganzen Buch</a>${audioSupported() ? `<button class="btn secondary small" data-listen-book="${b.fileId}">🎧 Als Podcast anhören</button>` : ''}</div>` : ''}
       ${b.error ? `<div class="notice err small">${esc(b.error)}</div>` : ''}
       <ul class="list">${b.chapters.map(c => {
         const p = prog[c.id];
@@ -278,6 +279,7 @@ function tabStoff(el, sub) {
           <div style="flex:1"><div>${esc(c.title)}</div><div class="tiny muted">S. ${esc(c.startLabel || c.startPage)}–${esc(c.endLabel || c.endPage)}${p?.assessed ? ` · ${Math.round(p.mastery * 100)} %${p.levels?.basis != null ? ` (Basis ${Math.round(p.levels.basis * 100)} %)` : ''}` : ''}${scope ? ` · ${PRIO_LABEL[scope]}` : ''}${c.summary ? '' : ' · noch nicht zusammengefasst'}</div>${!c.summary && c.preview ? `<div class="tiny muted" style="font-style:italic">„${esc(c.preview.slice(0, 140))} …“</div>` : ''}</div><span class="chev">›</span></a></li>`;
       }).join('')}</ul></div>`;
   }).join('') + `<p class="tiny muted">Ampel: grün = sitzt, gelb = teilweise, rot = Lücken, grau = noch nicht eingestuft.</p>`;
+  el.querySelectorAll('[data-listen-book]').forEach(btn => btn.onclick = () => listenSummaries(sub, sub.books.find(x => x.fileId === btn.dataset.listenBook)));
   el.querySelectorAll('[data-goto]').forEach(btn => btn.onclick = () => { const t = el.querySelector('#buch-' + CSS.escape(btn.dataset.goto)); if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - 70, behavior: 'smooth' }); });
   el.querySelectorAll('[data-rename]').forEach(btn => btn.onclick = e => {
     e.preventDefault();
@@ -336,6 +338,23 @@ function tabStoff(el, sub) {
   });
 }
 
+
+// ---------- Vorlesen ----------
+function listenSummaries(sub, book, fromChId) {
+  const chs = book.chapters.filter(c => isStudyChapter(c) && c.summary);
+  const start = Math.max(0, chs.findIndex(c => c.id === fromChId));
+  playAudio({ title: book.title + ' – Zusammenfassungen', key: 'sum:' + book.fileId, start, items: chs.map(c => ({ label: c.title, text: summaryListenText(c.summary) })) });
+}
+function listenBookText(sub, book, fromChId) {
+  const chs = book.chapters.filter(isStudyChapter);
+  const start = Math.max(0, chs.findIndex(c => c.id === fromChId));
+  playAudio({ title: book.title + ' – Buchtext', key: 'txt:' + book.fileId, start, items: chs.map(c => ({ label: c.title, load: () => chapterText(sub, c.id) })) });
+}
+function listenSkript(sub, book) {
+  const chs = book.chapters.filter(c => isStudyChapter(c) && c.skript);
+  playAudio({ title: book.title + ' – Skript', key: 'sk:' + book.fileId, items: chs.map(c => ({ label: c.title, text: skriptListenText(c.skript) })) });
+}
+
 export function chapterView(el, subId, chId, part = 'zusammenfassung') {
   const sub = store.subject(subId);
   const f = sub && findChapter(sub, chId);
@@ -366,7 +385,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
       body.innerHTML = book.batch ? `<div class="notice small">⏳ Dieses Kapitel wird gerade im Hintergrund zusammengefasst (zum halben Preis) und erscheint hier automatisch, sobald es fertig ist – meist innerhalb einer Stunde. Bis dahin kannst du im Reiter <strong>Lehrbuchtext</strong> lesen oder ein schon fertiges Kapitel lernen.</div>`
         : job && !job.done ? busy('Das Lehrbuch wird gerade verarbeitet …') : `<div class="card">Noch keine Zusammenfassung. <button class="btn small" data-a="sum">Jetzt erstellen</button></div>`;
     } else {
-      body.innerHTML = `${legend()}<div class="card pastel-card pc-2"><h3>Worum geht es?</h3>${md(s.kurzfassung)}</div>
+      body.innerHTML = `${audioSupported() ? `<div class="row" style="margin-bottom:8px"><button class="btn secondary small" data-a="listen">🎧 Anhören</button><span class="tiny muted">liest diese Zusammenfassung vor und macht danach mit den nächsten Kapiteln weiter</span></div>` : ''}${legend()}<div class="card pastel-card pc-2"><h3>Worum geht es?</h3>${md(s.kurzfassung)}</div>
       ${(s.themen || []).map((t, ti) => `<details class="card pastel-card pc-${ti % 6}" open><summary>${esc(t.titel)} <span class="cite">${esc(t.seiten || '')}</span> ${String(t.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span>' : ''}</summary>${md(t.inhalt)}</details>`).join('')}
       ${s.definitionen?.length ? `<div class="card"><h3>📚 Definitionen</h3><div class="def-grid">${s.definitionen.map(d => `<div class="def-chip"><strong>${esc(d.begriff)}</strong> ${String(d.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span> ' : ''}${d.seite ? `<span class="cite">[S. ${esc(String(d.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}<div class="small">${enrich(esc(d.definition))}</div></div>`).join('')}</div></div>` : ''}
       ${s.schemata?.length ? `<div class="card"><h3>🧭 Prüfungsschemata</h3>${s.schemata.map((sc, si) => `<h4>${esc(sc.titel)}</h4><ol class="steps">${(sc.schritte || []).map((x, xi) => `<li class="pc-${(si + xi) % 6}">${enrich(esc(String(x).replace(/^\d+\.\s*/, '')))}</li>`).join('')}</ol>`).join('')}</div>` : ''}
@@ -387,6 +406,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
     }
     body.onclick = async e => {
       const a = e.target.closest('[data-a]')?.dataset.a;
+      if (a === 'listen') { listenSummaries(sub, book, chId); return; }
       if (a === 'sum') {
         body.innerHTML = busy('Erstelle Zusammenfassung … (kann 1–2 Minuten dauern)');
         try { await summarizeChapter(subId, book.fileId, chId); render(); } catch (err) { body.innerHTML = errorBox(err); }
@@ -457,7 +477,10 @@ ${clip(await chapterText(store.subject(subId), chId), 60000)}`,
   }
   if (part === 'text') {
     body.innerHTML = busy('Lade Lehrbuchtext …');
-    chapterText(sub, chId).then(t => { body.innerHTML = `<div class="card sachverhalt" style="font-size:.95rem">${enrich(esc(t))}</div>`; }).catch(e => body.innerHTML = errorBox(e));
+    chapterText(sub, chId).then(t => {
+      body.innerHTML = `${audioSupported() ? `<div class="row" style="margin-bottom:8px"><button class="btn secondary small" data-listen>🎧 Buchtext vorlesen</button><span class="tiny muted">ab diesem Kapitel, ungekürzt</span></div>` : ''}<div class="card sachverhalt" style="font-size:.95rem">${enrich(esc(t))}</div>`;
+      const lb = body.querySelector('[data-listen]'); if (lb) lb.onclick = () => listenBookText(sub, book, chId);
+    }).catch(e => body.innerHTML = errorBox(e));
   }
 }
 
@@ -832,7 +855,7 @@ export function skriptView(el, subId, fileId) {
     const cite = x => x?.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : '';
     const li = arr => (arr || []).map(x => `<li>${enrich(esc(x.text || x))}${cite(x)}</li>`).join('');
     let html = `<div class="card no-print"><div class="row between"><div><div class="item-title">📄 ${esc(b.title)}</div><div class="small muted">Alles, was du zum Lösen von Fällen brauchst – Kapitel für Kapitel, mit Fußnoten, Rechtsprechung und Beispielen aus dem Buch.</div></div>
-      <div class="row"><a class="btn ghost small" href="#/fach/${subId}/stoff">‹ Lehrbuch</a>${!missing ? '<button class="btn secondary small" data-a="print">Drucken / PDF</button>' : ''}</div></div>
+      <div class="row"><a class="btn ghost small" href="#/fach/${subId}/stoff">‹ Lehrbuch</a>${audioSupported() && chs.some(c => c.skript) ? '<button class="btn secondary small" data-a="listen">🎧 Anhören</button>' : ''}${!missing ? '<button class="btn secondary small" data-a="print">Drucken / PDF</button>' : ''}</div></div>
       ${running.length ? `<div class="notice small" style="margin-top:8px">⏳ Wird im Hintergrund erstellt: ${running.map(x => esc(x.title)).join(', ')} – erscheint hier automatisch (meist unter einer Stunde).</div>`
         : missing ? `<div class="notice gold small" style="margin-top:8px">Für ${missing} von ${chs.length} Kapiteln gibt es das Skript noch nicht. Es wird einmalig aus dem vollständigen Kapiteltext erstellt (inkl. Fußnoten) – danach kostenlos.<div style="margin-top:6px"><button class="btn small" data-a="make">Skripten für alle Bücher erstellen</button> <span class="tiny muted">${allMissing} Kapitel · Kosten werden vorher angezeigt</span></div></div>` : ''}</div>`;
     html = html + legend() + `<div class="card"><h3 style="margin-top:0">Inhalt</h3><ol class="small" style="padding-left:20px">${chs.map(c => `<li><a href="#" data-jump="${c.id}">${esc(c.title)}</a>${c.skript ? '' : ' <span class="muted">(noch offen)</span>'}</li>`).join('')}</ol></div>`;
@@ -857,6 +880,7 @@ export function skriptView(el, subId, fileId) {
     const j = e.target.closest('[data-jump]');
     if (j) { e.preventDefault(); const t = el.querySelector('#sk-' + CSS.escape(j.dataset.jump)); if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - 60, behavior: 'smooth' }); return; }
     if (e.target.closest('[data-a=print]')) { window.print(); return; }
+    if (e.target.closest('[data-a=listen]')) { const sub = store.subject(subId); listenSkript(sub, sub.books.find(x => x.fileId === fileId)); return; }
     if (e.target.closest('[data-a=make]')) {
       const btn = e.target.closest('button'); btn.disabled = true; btn.textContent = 'Berechne Kosten …';
       const sub = store.subject(subId);

@@ -278,3 +278,18 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
 .skript-sec.ag { background: var(--p-blue); } .skript-sec.pr { background: var(--p-green); } .skript-sec.fa { background: var(--p-rose); }
 .skript-sec.rs { background: var(--p-lemon); } .skript-sec.bs { background: var(--p-mint); }
 .painted .steps > li > div > strong, .painted .no-paint { background: none; padding: 0; }
+
+/* Vorlese-Player */
+.player { position: fixed; left: 8px; right: 8px; bottom: calc(64px + var(--safe-bottom)); z-index: 25; background: var(--p-lilac, #ece6fb); color: #2b2b3a; border-radius: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.18); padding: 8px 10px 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow: hidden; }
+.player-bar { position: absolute; left: 0; top: 0; height: 3px; background: #8b7fd6; transition: width .3s; }
+.player-info { flex: 1 1 160px; min-width: 0; }
+.player-title { font-size: .85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player .tiny.muted { color: #5a5a70; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.player-btns { display: flex; gap: 2px; align-items: center; }
+.player-btns button { border: 0; background: transparent; font-size: 1.1rem; padding: 6px 7px; border-radius: 10px; cursor: pointer; color: inherit; min-width: 34px; }
+.player-btns button:hover { background: rgba(255,255,255,.5); }
+.player-btns button.pp { background: #fff; font-size: 1.25rem; }
+.player-btns button[data-p=rate] { font-size: .8rem; font-weight: 600; }
+body.has-player .app { padding-bottom: 170px; }
+@media (min-width: 900px) { .player { left: 216px; right: 16px; bottom: 16px; max-width: 980px; } }
+@media print { .player { display: none; } }
