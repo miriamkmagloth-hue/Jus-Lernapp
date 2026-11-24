@@ -10,7 +10,8 @@ const STAR_LABEL = ['selten / Hintergrund', 'kommt vereinzelt vor', 'kommt regel
 const filterState = {};
 
 const cite = x => x?.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : '';
-const booksOf = sub => sub.books.filter(b => bookRole(b) === 'stoff' && b.chapters?.some(c => c.skript));
+const roman = t => { const m = String(t).match(/Zivilrecht\s+([IVX]+)\b/); if (!m) return 99; const v = { I: 1, V: 5, X: 10 }; let n = 0; for (let i = 0; i < m[1].length; i++) { const a = v[m[1][i]], b = v[m[1][i + 1]] || 0; n += a < b ? -a : a; } return n; };
+const booksOf = sub => sub.books.filter(b => bookRole(b) === 'stoff' && b.chapters?.some(c => c.skript)).sort((a, b) => roman(a.title) - roman(b.title));
 
 export function kompaktView(el, subId, fileId) {
   const sub = store.subject(subId);
