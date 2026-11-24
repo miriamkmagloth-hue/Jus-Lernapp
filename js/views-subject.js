@@ -1,4 +1,5 @@
 // Ansichten innerhalb eines Fachs
+import { paint, legend } from './paint.js';
 import { store, allChapters, findChapter, textGet, syncExam, currentAttempt, isStudyChapter, bookRole, bookInExam, collectionCases } from './store.js';
 import { esc, md, enrich, toast, busy, errorBox, fmtDate, daysUntil, fmtMin, ampel, confirmDialog, openModal, closeModal } from './ui.js';
 import { setTitle, render, autoUpdate, queueProcessing } from './app.js';
@@ -167,12 +168,14 @@ ${ctx.text || '(keine passenden Stellen gefunden)'}`;
 
 // ---------- Falllösungsschemata ----------
 const schemaState = {};
-function stepHtml(st, depth = 0) {
+function stepHtml(st, depth = 0, idx = 0) {
   const sw = (st.sonderwissen || []).filter(x => x && (x.text || typeof x === 'string'));
-  return `<li style="margin:6px 0"><div><strong>${enrich(esc(st.schritt || ''))}</strong>${st.erklaerung ? `<div class="small">${enrich(esc(st.erklaerung))}</div>` : ''}</div>
-    ${sw.length ? `<ul class="small" style="margin:4px 0 0 0;padding-left:18px">${sw.map(x => `<li>💡 ${enrich(esc(x.text || x))}${x.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</li>`).join('')}</ul>` : ''}
-    ${(st.unterschritte || []).length ? `<ol type="${depth ? 'i' : 'a'}" style="padding-left:20px">${st.unterschritte.map(u => stepHtml(u, depth + 1)).join('')}</ol>` : ''}</li>`;
+  const subs = st.unterschritte || [];
+  return `<li class="${depth ? '' : 'pc-' + (idx % 6)}" ${depth ? 'style="margin:6px 0"' : ''}><div><strong class="no-paint">${enrich(esc(st.schritt || ''))}</strong>${st.erklaerung ? `<div class="small">${enrich(esc(st.erklaerung))}</div>` : ''}</div>
+    ${sw.length ? `<ul class="small sw">${sw.map(x => `<li>💡 ${enrich(esc(x.text || x))}${x.seite ? ` <span class="cite">[${esc(String(x.seite).replace(/^\[|\]$/g, ''))}]</span>` : ''}</li>`).join('')}</ul>` : ''}
+    ${subs.length ? `<ol type="${depth ? 'i' : 'a'}" class="sub">${subs.map(u => stepHtml(u, depth + 1)).join('')}</ol>` : ''}</li>`;
 }
+
 function tabSchemata(el, sub) {
   const state = schemaState[sub.id] ||= { book: '' };
   const draw = () => {
@@ -197,15 +200,16 @@ function tabSchemata(el, sub) {
           const sc = v.schema;
           html += `<div style="margin:10px 0 14px"><div class="row between"><div class="item-title">🧭 ${esc(sc.titel || v.title)}</div><button class="btn ghost small" data-orig="${b.fileId}|${v.page}">Originalgrafik (S. ${esc(v.label)})</button></div>
             ${sc.einleitung ? `<div class="small muted">${enrich(esc(sc.einleitung))}</div>` : ''}
-            <ol style="padding-left:20px">${(sc.schritte || []).map(st => stepHtml(st)).join('')}</ol>
-            ${(sc.hinweise || []).length ? `<div class="notice small">${sc.hinweise.map(h => '✓ ' + enrich(esc(h))).join('<br>')}</div>` : ''}</div>`;
+            <ol class="steps">${(sc.schritte || []).map((st, si) => stepHtml(st, 0, si)).join('')}</ol>
+            ${(sc.hinweise || []).length ? `<div class="schema-hint small">${sc.hinweise.map(h => '✓ ' + enrich(esc(h))).join('<br>')}</div>` : ''}</div>`;
         }
         const ts = c.summary?.schemata || [];
-        if (ts.length) html += `<details ${byCh.has(c.id) ? '' : 'open'}><summary class="small">Prüfungsschemata aus dem Text (${ts.length})</summary>${ts.map(x => `<div style="margin:8px 0"><strong class="small">${esc(x.titel || '')}</strong><ol class="small" style="padding-left:20px">${(x.schritte || []).map(st => `<li>${enrich(esc(String(st).replace(/^\d+\.\s*/, '')))}</li>`).join('')}</ol></div>`).join('')}</details>`;
+        if (ts.length) html += `<details ${byCh.has(c.id) ? '' : 'open'}><summary class="small">Prüfungsschemata aus dem Text (${ts.length})</summary>${ts.map((x, xi) => `<div style="margin:8px 0"><strong class="small">${esc(x.titel || '')}</strong><ol class="steps small">${(x.schritte || []).map((st, si) => `<li class="pc-${(xi + si) % 6}">${enrich(esc(String(st).replace(/^\d+\.\s*/, '')))}</li>`).join('')}</ol></div>`).join('')}</details>`;
         html += `</div>`;
       }
     }
-    el.innerHTML = html;
+    el.innerHTML = html.replace('<div class="card"><p class="small" style="margin-top:0">Die <strong>Visualisierungen', legend() + '<div class="card"><p class="small" style="margin-top:0">Die <strong>Visualisierungen');
+    paint(el);
     el.querySelector('#sbook').onchange = e => { state.book = e.target.value; draw(); };
   };
   el.onclick = async e => {
@@ -362,12 +366,12 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
       body.innerHTML = book.batch ? `<div class="notice small">⏳ Dieses Kapitel wird gerade im Hintergrund zusammengefasst (zum halben Preis) und erscheint hier automatisch, sobald es fertig ist – meist innerhalb einer Stunde. Bis dahin kannst du im Reiter <strong>Lehrbuchtext</strong> lesen oder ein schon fertiges Kapitel lernen.</div>`
         : job && !job.done ? busy('Das Lehrbuch wird gerade verarbeitet …') : `<div class="card">Noch keine Zusammenfassung. <button class="btn small" data-a="sum">Jetzt erstellen</button></div>`;
     } else {
-      body.innerHTML = `<div class="card"><h3>Worum geht es?</h3>${md(s.kurzfassung)}</div>
-      ${(s.themen || []).map(t => `<details class="card" open><summary>${esc(t.titel)} <span class="cite">${esc(t.seiten || '')}</span> ${String(t.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span>' : ''}</summary>${md(t.inhalt)}</details>`).join('')}
-      ${s.definitionen?.length ? `<div class="card"><h3>Definitionen</h3><ul class="list">${s.definitionen.map(d => `<li><strong>${esc(d.begriff)}</strong> ${String(d.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span> ' : ''}${d.seite ? `<span class="cite">[S. ${esc(String(d.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}<div class="small">${enrich(esc(d.definition))}</div></li>`).join('')}</ul></div>` : ''}
-      ${s.schemata?.length ? `<div class="card"><h3>Prüfungsschemata</h3>${s.schemata.map(sc => `<h4>${esc(sc.titel)}</h4><ol>${(sc.schritte || []).map(x => `<li>${enrich(esc(x))}</li>`).join('')}</ol>`).join('')}</div>` : ''}
-      ${s.stolperfallen?.length ? `<div class="card" style="border-color:var(--hl)"><h3>⚠ Stolperfallen</h3><ul>${s.stolperfallen.map(x => `<li>${enrich(esc(x.text || x))} ${x.seite ? `<span class="cite">[S. ${esc(String(x.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}</li>`).join('')}</ul></div>` : ''}
-      ${s.normen?.length ? `<div class="card"><h3>Normen</h3>${s.normen.map(n => `<span class="pill blue" style="margin:2px">${enrich(esc(n))}</span>`).join(' ')}</div>` : ''}
+      body.innerHTML = `${legend()}<div class="card pastel-card pc-2"><h3>Worum geht es?</h3>${md(s.kurzfassung)}</div>
+      ${(s.themen || []).map((t, ti) => `<details class="card pastel-card pc-${ti % 6}" open><summary>${esc(t.titel)} <span class="cite">${esc(t.seiten || '')}</span> ${String(t.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span>' : ''}</summary>${md(t.inhalt)}</details>`).join('')}
+      ${s.definitionen?.length ? `<div class="card"><h3>📚 Definitionen</h3><div class="def-grid">${s.definitionen.map(d => `<div class="def-chip"><strong>${esc(d.begriff)}</strong> ${String(d.ebene || '').startsWith('vert') ? '<span class="pill gold">Vertiefung</span> ' : ''}${d.seite ? `<span class="cite">[S. ${esc(String(d.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}<div class="small">${enrich(esc(d.definition))}</div></div>`).join('')}</div></div>` : ''}
+      ${s.schemata?.length ? `<div class="card"><h3>🧭 Prüfungsschemata</h3>${s.schemata.map((sc, si) => `<h4>${esc(sc.titel)}</h4><ol class="steps">${(sc.schritte || []).map((x, xi) => `<li class="pc-${(si + xi) % 6}">${enrich(esc(String(x).replace(/^\d+\.\s*/, '')))}</li>`).join('')}</ol>`).join('')}</div>` : ''}
+      ${s.stolperfallen?.length ? `<div class="card stolper"><h3>⚠ Stolperfallen</h3><ul>${s.stolperfallen.map(x => `<li>${enrich(esc(x.text || x))} ${x.seite ? `<span class="cite">[S. ${esc(String(x.seite).replace(/^S\.?\s*/, ''))}]</span>` : ''}</li>`).join('')}</ul></div>` : ''}
+      ${s.normen?.length ? `<div class="card norm-chips"><h3>§ Normen</h3>${s.normen.map(n => `<span class="pill blue" style="margin:2px">${enrich(esc(n))}</span>`).join(' ')}</div>` : ''}
       ${s.entscheidungen?.length ? `<div class="card"><h3>Im Kapitel zitierte Entscheidungen</h3><div class="row">${s.entscheidungen.map(g => `<button class="btn secondary small" data-gz="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="tiny muted">Antippen: Entscheidung im RIS öffnen und aufbereiten lassen.</p></div>` : ''}
       ${(() => {
         const all = collectionCases(sub);
@@ -379,6 +383,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
           ${rel.length ? `<h4>Fälle zu diesem Kapitel</h4><ul class="list">${rel.slice(0, 20).map(x => `<li><a class="item" href="#/fach/${subId}/fall/${encodeURIComponent('fs:' + x.book.fileId + ':' + x.chapter.id + ':' + x.idx)}"><div style="flex:1"><div>${esc(x.fall.titel || 'Fall')}</div><div class="tiny muted">${esc(x.book.title)}${x.fall.schwierigkeit ? ' · ' + esc(x.fall.schwierigkeit) : ''}</div></div><span class="chev">lösen ›</span></a></li>`).join('')}</ul>` : ''}</div>`;
       })()}
       <div class="row"><a class="btn" href="#/fach/${subId}/kapitel/${chId}/test">Wissen testen</a><button class="btn ghost small" data-a="sum">Neu zusammenfassen</button></div>`;
+      paint(body);
     }
     body.onclick = async e => {
       const a = e.target.closest('[data-a]')?.dataset.a;
@@ -830,22 +835,23 @@ export function skriptView(el, subId, fileId) {
       <div class="row"><a class="btn ghost small" href="#/fach/${subId}/stoff">‹ Lehrbuch</a>${!missing ? '<button class="btn secondary small" data-a="print">Drucken / PDF</button>' : ''}</div></div>
       ${running.length ? `<div class="notice small" style="margin-top:8px">⏳ Wird im Hintergrund erstellt: ${running.map(x => esc(x.title)).join(', ')} – erscheint hier automatisch (meist unter einer Stunde).</div>`
         : missing ? `<div class="notice gold small" style="margin-top:8px">Für ${missing} von ${chs.length} Kapiteln gibt es das Skript noch nicht. Es wird einmalig aus dem vollständigen Kapiteltext erstellt (inkl. Fußnoten) – danach kostenlos.<div style="margin-top:6px"><button class="btn small" data-a="make">Skripten für alle Bücher erstellen</button> <span class="tiny muted">${allMissing} Kapitel · Kosten werden vorher angezeigt</span></div></div>` : ''}</div>`;
-    html += `<div class="card"><h3 style="margin-top:0">Inhalt</h3><ol class="small" style="padding-left:20px">${chs.map(c => `<li><a href="#" data-jump="${c.id}">${esc(c.title)}</a>${c.skript ? '' : ' <span class="muted">(noch offen)</span>'}</li>`).join('')}</ol></div>`;
+    html = html + legend() + `<div class="card"><h3 style="margin-top:0">Inhalt</h3><ol class="small" style="padding-left:20px">${chs.map(c => `<li><a href="#" data-jump="${c.id}">${esc(c.title)}</a>${c.skript ? '' : ' <span class="muted">(noch offen)</span>'}</li>`).join('')}</ol></div>`;
     for (const c of chs) {
       const k = c.skript;
       const vis = (b.visuals || []).filter(v => v.chapterId === c.id && v.schema);
       html += `<div class="card skript-ch" id="sk-${c.id}" data-chid="${c.id}"><h3 style="margin-top:0">${esc(c.title)} <span class="tiny muted">S. ${esc(c.startLabel || '')}–${esc(c.endLabel || '')}</span></h3>`;
       if (!k) { html += `<div class="small muted">Noch nicht erstellt.${c.summary?.kurzfassung ? ' Kurzfassung: ' + enrich(esc(c.summary.kurzfassung)) : ''}</div></div>`; continue; }
       if (k.kernaussage) html += `<p class="small"><strong>Worum es im Fall geht:</strong> ${enrich(esc(k.kernaussage))}</p>`;
-      if ((k.anspruchsgrundlagen || []).length) html += `<div class="small"><strong>Anspruchsgrundlagen</strong><ul>${k.anspruchsgrundlagen.map(a => `<li>${enrich(esc(a.norm || ''))} – ${enrich(esc(a.wofuer || ''))}${cite(a)}</li>`).join('')}</ul></div>`;
-      if ((k.pruefung || []).length) html += `<div class="small"><strong>Prüfung im Fall</strong><ol style="padding-left:20px">${k.pruefung.map(p => `<li style="margin:6px 0"><strong>${enrich(esc(p.punkt || ''))}</strong>${cite(p)}${(p.voraussetzungen || []).length ? `<ul>${p.voraussetzungen.map(v => `<li>${enrich(esc(v))}</li>`).join('')}</ul>` : ''}${p.details ? `<div>${enrich(esc(p.details))}</div>` : ''}</li>`).join('')}</ol></div>`;
+      if ((k.anspruchsgrundlagen || []).length) html += `<div class="small skript-sec ag"><strong class="no-paint">§ Anspruchsgrundlagen</strong><ul>${k.anspruchsgrundlagen.map(a => `<li>${enrich(esc(a.norm || ''))} – ${enrich(esc(a.wofuer || ''))}${cite(a)}</li>`).join('')}</ul></div>`;
+      if ((k.pruefung || []).length) html += `<div class="small"><strong>🧭 Prüfung im Fall</strong><ol class="steps">${k.pruefung.map((p, pi) => `<li class="pc-${pi % 6}"><strong>${enrich(esc(p.punkt || ''))}</strong>${cite(p)}${(p.voraussetzungen || []).length ? `<ul>${p.voraussetzungen.map(v => `<li>${enrich(esc(v))}</li>`).join('')}</ul>` : ''}${p.details ? `<div>${enrich(esc(p.details))}</div>` : ''}</li>`).join('')}</ol></div>`;
       for (const v of vis) html += `<details class="small"><summary>🧭 Schema aus der Visualisierung: ${esc(v.schema.titel || v.title)}</summary><ol style="padding-left:20px">${(v.schema.schritte || []).map(st => `<li><strong>${enrich(esc(st.schritt || ''))}</strong>${st.erklaerung ? ' – ' + enrich(esc(st.erklaerung)) : ''}</li>`).join('')}</ol></details>`;
-      if ((k.klausurfallen || []).length) html += `<div class="small"><strong>⚠️ Klausurfallen</strong><ul>${li(k.klausurfallen)}</ul></div>`;
-      if ((k.rechtsprechung || []).length) html += `<div class="small"><strong>⚖️ Rechtsprechung, Fußnoten, Meinungsstreit</strong><ul>${li(k.rechtsprechung)}</ul></div>`;
-      if ((k.beispiele || []).length) html += `<div class="small"><strong>💡 Beispiele aus dem Buch</strong><ul>${li(k.beispiele)}</ul></div>`;
+      if ((k.klausurfallen || []).length) html += `<div class="small skript-sec fa"><strong class="no-paint">⚠️ Klausurfallen</strong><ul>${li(k.klausurfallen)}</ul></div>`;
+      if ((k.rechtsprechung || []).length) html += `<div class="small skript-sec rs"><strong class="no-paint">⚖️ Rechtsprechung, Fußnoten, Meinungsstreit</strong><ul>${li(k.rechtsprechung)}</ul></div>`;
+      if ((k.beispiele || []).length) html += `<div class="small skript-sec bs"><strong class="no-paint">💡 Beispiele aus dem Buch</strong><ul>${li(k.beispiele)}</ul></div>`;
       html += `</div>`;
     }
     el.innerHTML = html;
+    el.querySelectorAll('.skript-ch').forEach(x => paint(x));
   };
   el.onclick = async e => {
     const j = e.target.closest('[data-jump]');

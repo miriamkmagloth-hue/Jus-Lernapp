@@ -229,3 +229,51 @@ body.on-netlify .chat-input { bottom: calc(136px + var(--safe-bottom)); }
 .term-card { min-height: 180px; display: flex; flex-direction: column; justify-content: center; text-align: center; }
 .term-card .term { font-size: 1.35rem; font-weight: 700; }
 .cite { cursor: pointer; } .cite:hover { text-decoration: underline; }
+
+/* ---------- Pastell-Farben für visuelles Lernen ---------- */
+:root {
+  --p-blue: rgba(167, 199, 231, .45); --p-blue-b: #8fb3dc;
+  --p-green: rgba(178, 223, 196, .5); --p-green-b: #8ccaa5;
+  --p-rose: rgba(246, 190, 200, .5); --p-rose-b: #e99aaa;
+  --p-lemon: rgba(253, 234, 160, .6); --p-lemon-b: #e7cf6b;
+  --p-lilac: rgba(207, 190, 238, .5); --p-lilac-b: #b39ddf;
+  --p-peach: rgba(255, 212, 178, .55); --p-peach-b: #f4b183;
+  --p-mint: rgba(181, 234, 226, .5); --p-mint-b: #86d3c6;
+}
+.kw { border-radius: 4px; padding: 0 3px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.kw-vor { background: var(--p-blue); }
+.kw-folge { background: var(--p-green); }
+.kw-aus { background: var(--p-rose); }
+.kw-rsp { background: var(--p-lemon); }
+.kw-vermut { background: var(--p-mint); }
+.painted strong, .kw-def-demo { background: var(--p-lilac); border-radius: 4px; padding: 0 3px; }
+.paint-legend { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .78rem; margin: 0 0 10px; }
+.paint-legend .btn { margin-left: auto; }
+
+/* Themenkarten der Zusammenfassung: abwechselnd Pastell */
+.pastel-card { border-left: 6px solid var(--pc-b, var(--line)) !important; background: linear-gradient(90deg, var(--pc, transparent) 0, transparent 60%), var(--card) !important; }
+.pc-0 { --pc: var(--p-blue); --pc-b: var(--p-blue-b); }
+.pc-1 { --pc: var(--p-green); --pc-b: var(--p-green-b); }
+.pc-2 { --pc: var(--p-lilac); --pc-b: var(--p-lilac-b); }
+.pc-3 { --pc: var(--p-peach); --pc-b: var(--p-peach-b); }
+.pc-4 { --pc: var(--p-mint); --pc-b: var(--p-mint-b); }
+.pc-5 { --pc: var(--p-rose); --pc-b: var(--p-rose-b); }
+.pastel-card > summary { font-weight: 700; }
+.def-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.def-chip { background: var(--p-lilac); border-radius: 12px; padding: 8px 10px; font-size: .9rem; }
+.def-chip strong { display: block; margin-bottom: 2px; background: none !important; padding: 0 !important; }
+.card.stolper { background: linear-gradient(0deg, var(--p-rose), var(--p-rose)), var(--card) !important; border-color: var(--p-rose-b) !important; }
+.norm-chips .pill { background: var(--p-blue) !important; }
+
+/* Schemata als farbige Schrittfolge */
+.steps { list-style: none; padding: 0; margin: 8px 0; counter-reset: st; }
+.steps > li { counter-increment: st; position: relative; margin: 8px 0; padding: 10px 12px 10px 46px; border-radius: 14px; background: var(--pc); border: 1px solid var(--pc-b); }
+.steps > li::before { content: counter(st); position: absolute; left: 10px; top: 9px; width: 26px; height: 26px; border-radius: 50%; background: var(--pc-b); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: .85rem; }
+.steps > li:not(:last-child)::after { content: '↓'; position: absolute; left: 17px; bottom: -14px; color: var(--muted); font-size: .8rem; }
+.steps .sw { background: rgba(255, 255, 255, .55); border-radius: 10px; padding: 6px 10px; margin-top: 6px; list-style: none; }
+:root.is-dark .steps .sw { background: rgba(0, 0, 0, .2); }
+.steps .sub { padding-left: 18px; }
+.schema-hint { background: var(--p-lemon); border-radius: 12px; padding: 8px 12px; }
+.skript-sec { border-radius: 12px; padding: 8px 12px; margin: 8px 0; }
+.skript-sec.ag { background: var(--p-blue); } .skript-sec.pr { background: var(--p-green); } .skript-sec.fa { background: var(--p-rose); }
+.skript-sec.rs { background: var(--p-lemon); } .skript-sec.bs { background: var(--p-mint); }
