@@ -638,13 +638,14 @@ function tabOgh(el, sub) {
   const draw = () => {
     sub = store.subject(sub.id);
     let list = [...sub.rulings];
+    if (state.filter === 'klausur') list = list.filter(r => (r.erkl?.k || 0) >= 2);
     if (state.filter === 'neu') list = list.filter(r => r.isNew);
     if (state.filter === 'eigene') list = list.filter(r => r.source === 'upload');
     if (state.filter === 'zitiert') list = list.filter(r => r.cited);
     if (state.book) { const ids = new Set(sub.books.find(b => b.fileId === state.book)?.chapters.map(c => c.id) || []); list = list.filter(r => chaptersOf(r).some(id => ids.has(id))); }
     if (state.chapter) list = list.filter(r => chaptersOf(r).includes(state.chapter));
     if (state.q) { const q = state.q.toLowerCase(); list = list.filter(r => [r.gz, r.rsNr, r.title, r.head, r.schlagworte, (r.tags || []).join(' '), (r.normen || []).join(' '), r.summary?.kernaussagen?.join(' ')].join(' ').toLowerCase().includes(q)); }
-    list.sort((a, b) => (b.gzList?.length || 1) - (a.gzList?.length || 1) || (b.date || '').localeCompare(a.date || ''));
+    list.sort((a, b) => (b.erkl?.k || 0) - (a.erkl?.k || 0) || (b.gzList?.length || 1) - (a.gzList?.length || 1) || (b.date || '').localeCompare(a.date || ''));
     const citedNotAdded = state.filter === 'zitiert' ? [...citedAll.entries()].filter(([gz]) => !sub.rulings.some(r => (r.gzList || [r.gz]).some(g => g && g.replace(/\s+/g, '') === gz.replace(/\s+/g, '')))).sort((a, b) => b[1] - a[1]) : [];
     const job = jobs.get('ogh:' + sub.id), pj = prepJob();
     const bookChs = state.book ? (sub.books.find(b => b.fileId === state.book)?.chapters || []).filter(isStudyChapter) : [];
@@ -658,7 +659,8 @@ function tabOgh(el, sub) {
       const sub2 = r.head || r.summary?.kernaussagen?.[0] || (r.normen || []).slice(0, 4).join(', ');
       return `<li><a class="item" href="#/fach/${sub.id}/urteil/${encodeURIComponent(r.id)}"><div style="flex:1;min-width:0"><div class="item-title">${title(r)} ${r.isNew ? '<span class="pill gold">neu</span>' : ''} ${r.cited ? '<span class="pill blue">im Lehrbuch</span>' : ''}</div>
         ${tags.length ? `<div style="margin:4px 0">${tags.map(t => `<span class="pill">${esc(t)}</span>`).join(' ')}</div>` : ''}
-        <div class="small" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(String(sub2).slice(0, 400))}</div>
+        ${r.erkl ? `<div class="small kp-fokus no-paint" style="margin:4px 0">${r.erkl.k >= 3 ? '<span class="stars s3">★★★</span> ' : r.erkl.k === 2 ? '<span class="stars s2">★★☆</span> ' : ''}${esc(r.erkl.t)}</div>` : ''}
+        <div class="small ${r.erkl ? 'muted' : ''}" style="display:-webkit-box;-webkit-line-clamp:${r.erkl ? 2 : 3};-webkit-box-orient:vertical;overflow:hidden">${esc(String(sub2).slice(0, 400))}</div>
         <div class="tiny muted" style="margin-top:3px">${cids.map(id => chById.get(id)).filter(Boolean).map(c => '📘 ' + esc(c.title)).join(' · ') || 'noch keinem Kapitel zugeordnet'}${(r.normen || []).length ? ' · ' + esc(r.normen.slice(0, 3).join(', ')) : ''}</div></div><span class="chev">›</span></a></li>`;
     };
     el.innerHTML = `<div class="card"><div class="row between"><div class="small muted">${meta.lastCheck ? 'Zuletzt im RIS gesucht: ' + fmtDate(meta.lastCheck) + ` · anhand von ${meta.norms?.length || 0} Normen aus deinen Lehrbüchern` : 'Noch nicht im RIS gesucht.'}</div>
@@ -669,7 +671,7 @@ function tabOgh(el, sub) {
         <select id="fbook" style="flex:1;min-width:160px"><option value="">Alle Bücher</option>${books.map(b => `<option value="${b.fileId}" ${state.book === b.fileId ? 'selected' : ''}>${esc(b.title)} (${perBook(b)})</option>`).join('')}</select>
         ${state.book ? `<select id="fch" style="flex:1;min-width:160px"><option value="">Alle Kapitel</option>${bookChs.map(c => `<option value="${c.id}" ${state.chapter === c.id ? 'selected' : ''}>${esc(c.title)} (${perCh.get(c.id) || 0})</option>`).join('')}</select>` : ''}
       </div>
-      <div class="tabs">${[['alle', 'Alle'], ['neu', 'Neu'], ['zitiert', 'Im Lehrbuch zitiert'], ['eigene', 'Eigene Uploads']].map(([k, l]) => `<button class="tab ${state.filter === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
+      <div class="tabs">${[['alle', 'Alle'], ['klausur', '★ Für die Klausur'], ['neu', 'Neu'], ['zitiert', 'Im Lehrbuch zitiert'], ['eigene', 'Eigene Uploads']].map(([k, l]) => `<button class="tab ${state.filter === k ? 'active' : ''}" data-f="${k}">${l}</button>`).join('')}</div>
       <input type="text" id="q" placeholder="Suchen (Schlagwort, Norm, GZ, RS-Nummer) …" value="${esc(state.q)}" style="margin-bottom:12px">
       <div class="tiny muted" style="margin-bottom:6px">${list.length} Einträge</div>
       <div class="card"><ul class="list">${list.slice(0, 300).map(item).join('') || '<li class="muted small">Keine Einträge.</li>'}</ul></div>
@@ -705,7 +707,20 @@ export function rulingView(el, subId, rid, part = 'kern') {
     body.innerHTML = busy('Lade Entscheidung und bereite sie auf …');
     return summarizeRuling(subId, rid);
   };
-  if (part === 'kern' || part === 'zusammenfassung') {
+  if (part === 'kern' && r.kind === 'rs' && r.head && !r.summary) {
+    const chs = (r.chapterIds || []).map(id => findChapter(sub, id)).filter(Boolean);
+    const K = sub.kompakt?.chapters || {};
+    body.innerHTML = `<div class="card"><h3>Rechtssatz des OGH</h3><p>${enrich(esc(r.head))}</p>${(r.tags || []).length ? `<div>${r.tags.map(t => `<span class="pill">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>
+      ${r.erkl ? `<div class="card pastel-card pc-2"><h3>Was heißt das – und was bringt es im Fall?</h3><p>${enrich(esc(r.erkl.t))}</p><div class="small muted">${['Für die Klausur kaum wichtig', 'Kann im Fall eine Rolle spielen', 'Wichtig für die Falllösung', 'Sehr klausurrelevant'][r.erkl.k || 0]}</div></div>` : ''}
+      ${chs.length ? `<div class="card"><h3>Bezug zum Lehrbuch</h3>${chs.map(f => `<div class="small" data-chid="${f.chapter.id}" style="margin:8px 0"><strong>📘 ${esc(f.book.title.replace(/\s+–.*$/, ''))} – ${esc(f.chapter.title)}</strong> <span class="cite">[S. ${esc(f.chapter.startLabel || '')}]</span>
+          ${K[f.chapter.id]?.f ? `<div class="kp-fokus no-paint" style="margin-top:6px">🎯 ${enrich(esc(K[f.chapter.id].f))}</div>` : ''}
+          <div style="margin-top:4px"><a href="#/fach/${subId}/kapitel/${f.chapter.id}">Zusammenfassung ›</a>${sub.kompakt ? ` · <a href="#/fach/${subId}/kompakt/${f.book.fileId}">Prüfungs-Kompakt ›</a>` : ''}</div></div>`).join('')}
+          <p class="tiny muted">Tipp: In der Falllösung bringst du den Rechtssatz dort ein, wo das Lehrbuch das Problem behandelt – als Absicherung deiner Lösung („so auch die stRsp“).</p></div>` : ''}
+      <div class="card"><div class="small muted">Eine ausführliche KI-Aufbereitung der ganzen Entscheidung (Sachverhalt, Begründung) kostet ein paar Cent und ist für die Klausur meist nicht nötig.</div><button class="btn ghost small" data-a="ki" style="margin-top:6px">Trotzdem aufbereiten lassen</button></div>`;
+    paint(body);
+    const ki = body.querySelector('[data-a=ki]');
+    if (ki) ki.onclick = () => { location.hash = `#/fach/${subId}/urteil/${encodeURIComponent(rid)}/zusammenfassung`; };
+  } else if (part === 'kern' || part === 'zusammenfassung') {
     ensureSummary().then(s => {
       if (part === 'kern') {
         body.innerHTML = `<div class="card"><h3>Kernaussagen</h3><ol>${(s.kernaussagen || []).map(k => `<li>${enrich(esc(k))}</li>`).join('')}</ol></div>
