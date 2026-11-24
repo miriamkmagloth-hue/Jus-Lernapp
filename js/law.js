@@ -57,6 +57,7 @@ export async function openLaw({ para, law, kind = 'para', context = '', subId, h
 
 
 // Seitenangabe wie „S. 21–22“, „S. 290 f“, „S. 145, 147“ → Buchseiten zum Nachlesen
+const PDF_CACHE = new Map();
 export async function openPages({ subId, chId, fileId, ref }) {
   const sub = store.subject(subId);
   if (!sub) return;
@@ -81,18 +82,17 @@ export async function openPages({ subId, chId, fileId, ref }) {
     }
     const nums = [...wanted].sort((a, b) => a - b);
     if (!nums.length) throw new Error('Seite nicht gefunden');
-    body.innerHTML = `<div class="row" style="margin:8px 0"><button class="btn secondary small" data-orig>Originalseite${nums.length > 1 ? 'n' : ''} ansehen</button></div>
-      <div class="sachverhalt" style="font-size:.95rem;max-height:62vh;overflow:auto">${nums.map(n => { const p = t.pages[n - 1]; return `<div class="tiny muted" style="margin:10px 0 4px">— Seite ${esc(p.label)} —</div>${esc(p.text)}`; }).join('')}</div>`;
-    body.querySelector('[data-orig]').onclick = async () => {
-      const box = body.querySelector('.sachverhalt');
-      box.innerHTML = busy('Lade die Originalseiten aus dem Buch …');
-      try {
-        const { downloadFile } = await import('./drive.js'); const { renderPdfPages } = await import('./extract.js');
-        const f = sub.files[book.fileId];
-        const dl = await downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name });
-        const imgs = await renderPdfPages(dl.buffer, nums, { scale: 1.6, quality: 0.8 });
-        box.innerHTML = nums.map(n => `<img src="data:image/jpeg;base64,${imgs[n]}" style="width:100%;margin-bottom:8px;border-radius:6px">`).join('');
-      } catch (err) { box.innerHTML = `<div class="notice err small">${esc(err.message)}</div>`; }
-    };
+    // direkt die Originalseiten aus dem Buch zeigen (PDF bleibt für weitere Aufrufe im Speicher)
+    body.innerHTML = busy(`Lade ${nums.length > 1 ? 'die Seiten' : 'die Seite'} aus dem Buch …`);
+    const { renderPdfPages } = await import('./extract.js');
+    let buf = PDF_CACHE.get(book.fileId);
+    if (!buf) {
+      const { downloadFile } = await import('./drive.js');
+      const f = sub.files[book.fileId];
+      buf = (await downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name })).buffer;
+      PDF_CACHE.clear(); PDF_CACHE.set(book.fileId, buf);
+    }
+    const imgs = await renderPdfPages(buf.slice(0), nums, { scale: 1.7, quality: 0.85 });
+    body.innerHTML = `<div style="max-height:75vh;overflow:auto">${nums.map(n => `<div class="tiny muted" style="margin:8px 0 4px">Seite ${esc(t.pages[n - 1].label)}</div><img src="data:image/jpeg;base64,${imgs[n]}" style="width:100%;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.12)">`).join('')}</div>`;
   } catch (err) { body.innerHTML = `<div class="notice err small">${esc(err.message)}</div>`; }
 }
