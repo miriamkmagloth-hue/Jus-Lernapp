@@ -74,7 +74,8 @@ export async function openPages({ subId, chId, fileId, ref }) {
     // Zahlen aus der Angabe lesen
     const txt = ref.replace(/^\[|\]$/g, '').replace(/^S\.?\s*/, '');
     const wanted = new Set();
-    for (const part of txt.split(/[,;]/)) {
+    if (byLabel.has(txt.trim())) wanted.add(byLabel.get(txt.trim()));
+    else for (const part of txt.split(/[,;]/)) {
       const r = part.match(/(\d+)\s*(?:[–-]\s*(\d+))?\s*(ff?)?/);
       if (!r) continue;
       const a = +r[1], b = r[2] ? +r[2] : r[3] === 'ff' ? a + 2 : r[3] === 'f' ? a + 1 : a;

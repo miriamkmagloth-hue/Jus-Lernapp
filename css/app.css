@@ -328,3 +328,8 @@ body.has-player .app { padding-bottom: 170px; }
 .book-view { flex: 1; min-height: 0; overflow: auto; background: #f4f1f8; border-radius: 8px; padding: 2px; text-align: center; touch-action: pan-x pan-y pinch-zoom; }
 .book-page { display: inline-block; max-width: none; border-radius: 4px; box-shadow: 0 1px 6px rgba(0,0,0,.15); background: #fff; }
 .book-page.marked { outline: 3px solid #f3d35b; }
+
+/* Suche */
+.search-book summary { cursor: pointer; list-style: none; }
+.search-hit mark { background: #fff0a8; color: inherit; border-radius: 3px; padding: 0 1px; }
+.search-hit:hover { background: #faf6ff; }

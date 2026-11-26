@@ -1,10 +1,10 @@
 // Service Worker: App offline startbar machen
-const VERSION = 'lernapp-v70';
+const VERSION = 'lernapp-v71';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/store.js', 'js/drive.js', 'js/ai.js', 'js/extract.js', 'js/ris.js',
   'js/planner.js', 'js/ui.js', 'js/processing.js', 'js/views-subject.js', 'js/views-learn.js',
-  'js/views-main.js', 'js/chat.js', 'js/jobs.js', 'js/theme.js', 'js/calendar.js', 'js/law.js', 'js/costs.js', 'js/structure.js', 'js/merge.js', 'js/paint.js', 'js/audio.js', 'js/cheer.js', 'js/views-kompakt.js',
+  'js/views-main.js', 'js/chat.js', 'js/jobs.js', 'js/theme.js', 'js/calendar.js', 'js/law.js', 'js/costs.js', 'js/structure.js', 'js/merge.js', 'js/paint.js', 'js/audio.js', 'js/cheer.js', 'js/views-kompakt.js', 'js/views-search.js',
   'icons/icon-192.png', 'icons/icon-512.png'
 ];
 
