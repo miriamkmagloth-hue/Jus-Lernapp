@@ -6,7 +6,8 @@ import { setTitle } from './app.js';
 const state = {};           // pro Fach: { q, scope, results }
 const textCache = new Map(); // fileId -> normalisierte Seiten
 
-const norm = s => s.toLowerCase().replace(/ß/g, 'ss').normalize('NFD').replace(/[̀-ͯ]/g, '');
+// gleich lange Normalform: klein, Umlaute/Akzente → Grundbuchstabe, ß → s, Bindestriche wie Leerzeichen (Zug-um-Zug = Zug um Zug)
+const norm = s => s.normalize('NFC').toLowerCase().replace(/ß/g, 's').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[-\u2010\u2011\u2013]/g, ' ');
 // Text für die Suche aufbereiten: Silbentrennung am Zeilenende entfernen, Leerraum vereinheitlichen
 const clean = s => String(s || '').replace(/(\w)-\s*\n\s*(\w)/g, '$1$2').replace(/\s+/g, ' ');
 
@@ -14,7 +15,11 @@ async function pagesOf(sub, b) {
   if (textCache.has(b.fileId)) return textCache.get(b.fileId);
   const { getFileText } = await import('./processing.js');
   const t = await getFileText(sub, b.fileId);
-  const pages = t.pages.map(p => { const text = clean(p.text); return { n: p.n, label: p.label, text, low: norm(text) }; });
+  const chs = (b.chapters || []).filter(c => c.startPage);
+  const from = chs.length ? Math.min(...chs.map(c => c.startPage)) : 1, to = chs.length ? Math.max(...chs.map(c => c.endPage || c.startPage)) : 1e9;
+  const pages = t.pages
+    .filter(p => p.n >= from && p.n <= to && ((p.text || '').match(/(?:\.\s?){6,}/g) || []).length < 6) // ohne Inhaltsverzeichnis, Vorwort, Stichwortverzeichnis
+    .map(p => { const text = clean(p.text).normalize('NFC'); return { n: p.n, label: p.label, text, low: norm(text) }; });
   textCache.set(b.fileId, pages);
   return pages;
 }
