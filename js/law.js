@@ -105,13 +105,23 @@ export async function openPages({ subId, chId, fileId, ref }) {
     const marked = new Set(nums);
     const label = n => t.pages[n - 1]?.label ?? n;
     const imgCache = new Map();
-    const getImg = n => { if (!imgCache.has(n)) imgCache.set(n, renderPdfPage(doc, n, { scale: 1.7, quality: 0.85 })); return imgCache.get(n); };
-    body.innerHTML = `<div class="row between" style="margin:8px 0;gap:6px;flex-wrap:nowrap">
+    const getImg = n => { if (!imgCache.has(n)) imgCache.set(n, renderPdfPage(doc, n, { scale: 2.4, quality: 0.85 })); return imgCache.get(n); };
+    // Buch über den ganzen Bildschirm
+    card.classList.add('book-full');
+    let zoom = +(localStorage.getItem('bookZoom') || 100);
+    body.innerHTML = `<div class="row between book-bar" style="gap:6px;flex-wrap:wrap">
         <button class="btn secondary small" data-prev>◀ zurück</button>
         <span class="small" data-lbl style="text-align:center"></span>
         <button class="btn secondary small" data-next>weiter ▶</button>
       </div>
-      <div data-view style="max-height:72vh;overflow:auto;touch-action:pan-y pinch-zoom"></div>
+      <div class="row book-zoom" style="gap:6px;justify-content:center;align-items:center;margin:6px 0">
+        <button class="btn ghost small" data-z="-">−</button>
+        <input type="range" data-zr min="60" max="300" step="10" value="${zoom}" style="width:min(320px,50vw)">
+        <button class="btn ghost small" data-z="+">+</button>
+        <span class="tiny muted" data-zl>${zoom} %</span>
+        <button class="btn ghost small" data-z="0">Anpassen</button>
+      </div>
+      <div data-view class="book-view"></div>
       <div class="row" style="margin-top:6px;gap:6px;justify-content:center">
         <span class="tiny muted">Gehe zu Seite</span><input data-go type="text" inputmode="numeric" style="width:70px" placeholder="${esc(label(nums[0]))}">
       </div>`;
@@ -127,13 +137,27 @@ export async function openPages({ subId, chId, fileId, ref }) {
       try {
         const img = await getImg(cur);
         if (my !== token) return;
-        view.innerHTML = `<img src="data:image/jpeg;base64,${img}" style="width:100%;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.12)${marked.has(cur) ? ';outline:3px solid var(--p-lemon, #fff3b0)' : ''}">`;
-        view.scrollTop = 0;
+        view.innerHTML = `<img src="data:image/jpeg;base64,${img}" class="book-page${marked.has(cur) ? ' marked' : ''}">`;
+        applyZoom(); view.scrollTop = 0; view.scrollLeft = 0;
         // Nachbarseiten schon vorbereiten
         if (cur < total) getImg(cur + 1).catch(() => {});
         if (cur > 1) getImg(cur - 1).catch(() => {});
       } catch (e) { if (my === token) { imgCache.delete(cur); view.innerHTML = `<div class="notice err small">${esc(e.message)}</div>`; } }
     };
+    // Zoom: Seite so breit wie der Bildschirm (100 %), größer → seitlich scrollen
+    function applyZoom() {
+      const im = view.querySelector('img'); if (!im) return;
+      const base = Math.min(view.clientWidth - 4, 1000);
+      im.style.width = Math.round(base * zoom / 100) + 'px';
+      body.querySelector('[data-zl]').textContent = zoom + ' %';
+      body.querySelector('[data-zr]').value = zoom;
+      try { localStorage.setItem('bookZoom', zoom); } catch {}
+    }
+    const setZoom = z => { const im = view.querySelector('img'); const cx = view.scrollLeft + view.clientWidth / 2, cy = view.scrollTop; const w0 = im?.offsetWidth || 1; zoom = Math.max(60, Math.min(300, Math.round(z / 10) * 10)); applyZoom(); const f = (im?.offsetWidth || 1) / w0; view.scrollLeft = cx * f - view.clientWidth / 2; view.scrollTop = cy * f; };
+    body.querySelector('[data-zr]').oninput = e => setZoom(+e.target.value);
+    body.querySelectorAll('[data-z]').forEach(b => b.onclick = () => setZoom(b.dataset.z === '+' ? zoom + 20 : b.dataset.z === '-' ? zoom - 20 : 100));
+    view.addEventListener('wheel', e => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom(zoom - Math.sign(e.deltaY) * 10); } }, { passive: false });
+    window.addEventListener('resize', applyZoom);
     body.querySelector('[data-prev]').onclick = () => show(cur - 1);
     body.querySelector('[data-next]').onclick = () => show(cur + 1);
     body.querySelector('[data-go]').onchange = e => {
@@ -145,6 +169,7 @@ export async function openPages({ subId, chId, fileId, ref }) {
     view.addEventListener('touchstart', e => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sx = null; }, { passive: true });
     view.addEventListener('touchend', e => {
       if (sx == null) return; const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null;
+      if (zoom > 100 && view.scrollWidth > view.clientWidth + 5) return; // beim Zoomen wird seitlich geschoben, nicht geblättert
       if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) show(cur + (dx < 0 ? 1 : -1));
     }, { passive: true });
     // Pfeiltasten am Laptop
@@ -152,6 +177,7 @@ export async function openPages({ subId, chId, fileId, ref }) {
       if (!document.body.contains(view)) { document.removeEventListener('keydown', onKey); return; }
       if (e.target.matches?.('input,textarea')) return;
       if (e.key === 'ArrowRight') show(cur + 1); else if (e.key === 'ArrowLeft') show(cur - 1);
+      else if (e.key === '+' || e.key === '=') setZoom(zoom + 20); else if (e.key === '-') setZoom(zoom - 20);
     };
     document.addEventListener('keydown', onKey);
     await show(cur);

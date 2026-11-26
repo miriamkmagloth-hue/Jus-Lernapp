@@ -75,12 +75,12 @@ export function toast(msg, ms = 2800) {
 
 export function openModal(html, onMount) {
   const m = $('#modal'), c = $('#modalCard');
-  c.innerHTML = html; m.hidden = false;
+  c.classList.remove('book-full'); c.innerHTML = html; m.hidden = false;
   m.onclick = e => { if (e.target === m) closeModal(); };
   onMount && onMount(c);
   return c;
 }
-export function closeModal() { $('#modal').hidden = true; $('#modalCard').innerHTML = ''; }
+export function closeModal() { $('#modal').hidden = true; $('#modalCard').innerHTML = ''; $('#modalCard').classList.remove('book-full'); }
 
 export function confirmDialog(text, okLabel = 'OK') {
   return new Promise(resolve => {
