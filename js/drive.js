@@ -145,6 +145,7 @@ async function token() {
 // Zugang rechtzeitig vor Ablauf still erneuern (nur mit Server möglich)
 setInterval(() => { if (accessToken && tokenExpiry - Date.now() < 5 * 60 * 1000) refreshSilently(); }, 60 * 1000);
 
+export async function authHeader() { return { Authorization: 'Bearer ' + await token() }; }
 async function gfetch(url, opts = {}, retry = true) {
   const t = await token();
   const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + t } });

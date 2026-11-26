@@ -84,15 +84,21 @@ export async function openPages({ subId, chId, fileId, ref }) {
     if (!nums.length) throw new Error('Seite nicht gefunden');
     // ganzes Buch öffnen, an der verwiesenen Seite beginnen – vor und zurück blättern
     body.innerHTML = busy('Lade das Buch …');
-    const { openPdf, renderPdfPage } = await import('./extract.js');
+    const { openPdf, openPdfUrl, renderPdfPage } = await import('./extract.js');
     let doc = PDF_CACHE.get(book.fileId);
     if (!doc) {
-      const { downloadFile } = await import('./drive.js');
-      const f = sub.files[book.fileId];
-      const buf = (await downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name })).buffer;
+      const drive = await import('./drive.js');
       for (const d of PDF_CACHE.values()) { try { d.destroy(); } catch {} }
       PDF_CACHE.clear();
-      doc = await openPdf(buf);
+      try {
+        // nur die nötigen Seiten aus Drive holen
+        doc = await openPdfUrl(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(book.fileId)}?alt=media`, await drive.authHeader());
+      } catch (e1) {
+        console.warn('Teil-Laden fehlgeschlagen, lade ganzes Buch', e1);
+        const f = sub.files[book.fileId];
+        const buf = (await drive.downloadFile({ id: book.fileId, mimeType: f?.mimeType || 'application/pdf', name: f?.name })).buffer;
+        doc = await openPdf(buf);
+      }
       PDF_CACHE.set(book.fileId, doc);
     }
     const total = doc.numPages;
@@ -149,5 +155,10 @@ export async function openPages({ subId, chId, fileId, ref }) {
     };
     document.addEventListener('keydown', onKey);
     await show(cur);
-  } catch (err) { body.innerHTML = `<div class="notice err small">${esc(err.message)}</div>`; }
+  } catch (err) {
+    const login = /401|403|anmeld|token|sign|auth/i.test(err.message);
+    body.innerHTML = `<div class="notice err small">${login ? 'Die Verbindung zu Google Drive ist abgelaufen – bitte kurz neu anmelden, dann geht das Buch wieder auf.' : 'Das Buch konnte nicht geöffnet werden.'}<div class="tiny muted" style="margin-top:4px">${esc(err.message)}</div></div>${login ? '<button class="btn small" data-relogin style="margin-top:8px">Bei Google anmelden</button>' : '<button class="btn small" data-retry style="margin-top:8px">Nochmal versuchen</button>'}`;
+    const rl = body.querySelector('[data-relogin]'); if (rl) rl.onclick = async () => { try { const d = await import('./drive.js'); await d.signIn(); closeModal(); openPages({ subId, chId, fileId, ref }); } catch (e) { alert(e.message); } };
+    const rt = body.querySelector('[data-retry]'); if (rt) rt.onclick = () => { closeModal(); PDF_CACHE.clear(); openPages({ subId, chId, fileId, ref }); };
+  }
 }

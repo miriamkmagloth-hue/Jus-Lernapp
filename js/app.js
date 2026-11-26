@@ -75,7 +75,7 @@ document.addEventListener('click', e => {
   const m = (location.hash || '').match(/^#\/fach\/([^/]+)(?:\/(kapitel|skript)\/([^/]+))?/);
   if (!m) return;
   const chId = c.closest('[data-chid]')?.dataset.chid || (m[2] === 'kapitel' ? m[3] : '');
-  openPages({ subId: m[1], chId, fileId: m[2] === 'skript' ? m[3] : '', ref: c.textContent });
+  openPages({ subId: m[1], chId, fileId: m[2] === 'skript' ? m[3] : '', ref: (c.textContent.match(/\[[^\]]*\]/) || [c.textContent])[0] });
 });
 
 document.addEventListener('click', e => {

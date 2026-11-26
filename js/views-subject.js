@@ -365,7 +365,7 @@ export function chapterView(el, subId, chId, part = 'zusammenfassung') {
   markStudied(chId);
   const p = store.state.progress.chapters[chId];
   const parts = [['zusammenfassung', 'Zusammenfassung'], ['minifaelle', '🎯 Mini-Fälle'], ['test', 'Multiple Choice'], ['fragen', 'Freie Fragen'], ['karten', 'Karteikarten'], ['chat', 'Chat'], ['text', 'Lehrbuchtext']];
-  el.innerHTML = `<div class="small muted">${esc(sub.name)} · ${esc(book.title)} · S. ${esc(ch.startLabel || ch.startPage)}–${esc(ch.endLabel || ch.endPage)}</div>
+  el.innerHTML = `<div class="small muted" data-chid="${ch.id}">${esc(sub.name)} · ${esc(book.title)} · <span class="cite book-open">📖 [S. ${esc(ch.startLabel || ch.startPage)}]</span> <span class="tiny">bis S. ${esc(ch.endLabel || ch.endPage)}</span></div>
     <div class="row" style="margin:6px 0 10px"><span class="dot ${ampel(p?.mastery || 0, p?.assessed)}"></span><span class="small">${p?.assessed ? `Kenntnisstand ${Math.round(p.mastery * 100)} %${p.levels ? ' (' + levelText(p) + ')' : ''}` : 'noch nicht eingestuft'}</span></div>
     ${isStudyChapter(ch) ? '' : `<div class="notice warn small">Dieses Kapitel zählt nicht als Lernstoff (z. B. Verzeichnis oder Übersicht) und kommt in Plan, Einstufung und Tests nicht vor. <button class="btn ghost small" data-vis="show">Doch als Lernstoff zählen</button></div>`}
     ${(() => { const n = sub.rulings.filter(r => ((r.chapterIds || []).includes(chId)) || (!(r.chapterIds || []).length && chaptersByNorm(sub, r).includes(chId))).length; return n ? `<div style="margin:-4px 0 8px"><a class="small" href="#/fach/${subId}/ogh" data-ogh="${chId}">⚖️ ${n} OGH-Rechtssätze zu diesem Kapitel</a></div>` : ''; })()}

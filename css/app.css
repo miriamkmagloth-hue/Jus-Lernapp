@@ -316,3 +316,8 @@ body.has-player .app { padding-bottom: 170px; }
 .kp-bar > div { height: 100%; background: linear-gradient(90deg, #c9b8f0, #f3b6cf); border-radius: 6px; }
 @media (max-width: 600px) { .kp-ch ol.small, .card ol.small[style*="columns"] { columns: 1 !important; } }
 @media print { .kp-ch { break-inside: avoid-page; } }
+
+/* Seitenverweise gut antippbar */
+.cite { display: inline-block; padding: 1px 7px; margin: 1px 0; border-radius: 10px; background: #f3ecfb; border: 1px solid #ddd0f3; text-decoration: none !important; -webkit-tap-highlight-color: rgba(150,120,220,.25); }
+.cite:active { background: #e4d8f7; }
+.cite.book-open { font-size: .9em; padding: 3px 10px; background: #fff; }

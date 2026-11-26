@@ -139,6 +139,11 @@ export function isSupported(f) {
 
 
 // Eine PDF-Seite als JPEG (Base64) rendern – für Grafiken wie „Visualisierung“ im Lehrbuch
+// PDF direkt aus Drive öffnen und nur die benötigten Teile laden (schont Handy-Speicher und Datenvolumen)
+export async function openPdfUrl(url, headers) {
+  const lib = await pdfjs();
+  return lib.getDocument({ url, httpHeaders: headers, withCredentials: false, disableAutoFetch: true, disableStream: true, rangeChunkSize: 262144, isEvalSupported: false }).promise;
+}
 export async function openPdf(buffer) {
   const lib = await pdfjs();
   return lib.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false }).promise;
